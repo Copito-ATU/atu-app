@@ -199,7 +199,7 @@ function Shimmer({ band = 0.55, color = 'rgba(255,255,255,0.22)' }) {
   const translateX = x.interpolate({ inputRange: [0, 1], outputRange: [-w * 0.8, w * 1.2] });
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none" onLayout={e => setW(e.nativeEvent.layout.width)}>
-      <Animated.View style={{ position: 'absolute', top: '-60%', bottom: '-60%', width: w * band, transform: [{ translateX }, { rotate: '18deg' }] }}>
+      <Animated.View style={{ position: 'absolute', top: -200, bottom: -200, width: w * band, transform: [{ translateX }, { rotate: '18deg' }] }}>
         <LinearGradient
           colors={['rgba(255,255,255,0)', color, 'rgba(255,255,255,0)']}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
