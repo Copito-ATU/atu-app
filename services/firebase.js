@@ -3,21 +3,33 @@ import { initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const env = Constants.expoConfig?.extra || {};
+const getEnv = (key, fallback) => {
+  const value = env[key] ?? process.env[key];
+  return value !== undefined && value !== null ? value : fallback;
+};
+
 const firebaseConfig = {
-  apiKey:            process.env.EXPO_PUBLIC_FIREBASE_API_KEY            || 'REPLACE_WITH_FIREBASE_API_KEY',
-  authDomain:        process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN        || 'atu-hackathon-2026.firebaseapp.com',
-  databaseURL:       process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL       || 'https://atu-hackathon-2026-default-rtdb.firebaseio.com',
-  projectId:         process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID         || 'atu-hackathon-2026',
-  storageBucket:     process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET     || 'atu-hackathon-2026.firebasestorage.app',
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID|| '912531511612',
-  appId:             process.env.EXPO_PUBLIC_FIREBASE_APP_ID             || 'REPLACE_WITH_FIREBASE_APP_ID',
-  measurementId:     process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID     || 'REPLACE_WITH_MEASUREMENT_ID',
+  apiKey:            getEnv('EXPO_PUBLIC_FIREBASE_API_KEY',            'REPLACE_WITH_FIREBASE_API_KEY'),
+  authDomain:        getEnv('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',        'atu-hackathon-2026.firebaseapp.com'),
+  databaseURL:       getEnv('EXPO_PUBLIC_FIREBASE_DATABASE_URL',       'https://atu-hackathon-2026-default-rtdb.firebaseio.com'),
+  projectId:         getEnv('EXPO_PUBLIC_FIREBASE_PROJECT_ID',         'atu-hackathon-2026'),
+  storageBucket:     getEnv('EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',     'atu-hackathon-2026.firebasestorage.app'),
+  messagingSenderId: getEnv('EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID', '912531511612'),
+  appId:             getEnv('EXPO_PUBLIC_FIREBASE_APP_ID',             'REPLACE_WITH_FIREBASE_APP_ID'),
+  measurementId:     getEnv('EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID',     'REPLACE_WITH_MEASUREMENT_ID'),
 };
 
 // ─── Google OAuth Client IDs ──────────────────────────────────────────────────
 // Web client (Expo Go via proxy auth.expo.io):
-export const GOOGLE_WEB_CLIENT_ID    = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID    || 'REPLACE_WITH_GOOGLE_WEB_CLIENT_ID';
-export const GOOGLE_CLIENT_SECRET    = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_SECRET    || 'REPLACE_WITH_GOOGLE_CLIENT_SECRET';
+export const GOOGLE_WEB_CLIENT_ID    = getEnv('EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID',    'REPLACE_WITH_GOOGLE_WEB_CLIENT_ID');
+export const GOOGLE_CLIENT_SECRET    = getEnv('EXPO_PUBLIC_GOOGLE_CLIENT_SECRET',    'REPLACE_WITH_GOOGLE_CLIENT_SECRET');
+
+// Feature flags for development/testing
+export const EXPO_PUBLIC_ENABLE_GOOGLE_LOGIN = getEnv('EXPO_PUBLIC_ENABLE_GOOGLE_LOGIN', 'true');
+export const ENABLE_GOOGLE_LOGIN = String(EXPO_PUBLIC_ENABLE_GOOGLE_LOGIN).toLowerCase() === 'true';
+export const EXPO_PUBLIC_BYPASS_AUTH = getEnv('EXPO_PUBLIC_BYPASS_AUTH', 'false');
+export const BYPASS_AUTH = String(EXPO_PUBLIC_BYPASS_AUTH).toLowerCase() === 'true';
 
 // Android client — creado en Google Cloud Console con SHA-1 del keystore EAS
 // Pasos: 1) eas credentials -p android → copia el SHA-1

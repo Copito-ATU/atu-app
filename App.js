@@ -3,9 +3,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Keyboard, Dimensions, Linking, Image, Modal, SafeAreaView, Animated,
+  TextInput, ActivityIndicator, Alert, Keyboard, Dimensions, Linking, Image, Modal, SafeAreaView, Animated, Easing,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Location from 'expo-location';
 import * as WebBrowser from 'expo-web-browser';
@@ -13,7 +15,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import { exchangeCodeAsync, makeRedirectUri } from 'expo-auth-session';
 import { GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged } from 'firebase/auth';
 import { FIREBASE_URL } from './constants';
-import { auth, GOOGLE_WEB_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID } from './services/firebase';
+import { auth, GOOGLE_WEB_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, ENABLE_GOOGLE_LOGIN, BYPASS_AUTH, EXPO_USERNAME } from './services/firebase';
 import { Platform } from 'react-native';
 import { getTrafficAlerts } from './services/trafficAlerts';
 import { searchPlaces, getPlaceCoords, getWalkingRoute, getTaxiEstimate, getTransitRoute } from './services/googleMaps';
@@ -22,17 +24,20 @@ import { askYatu } from './services/yatu';
 import { WebView } from 'react-native-webview';
 import RouteMapView from './components/RouteMapView';
 import LoginScreen from './components/LoginScreen';
+import { C, GRAD, SHADOW, R as RAD, Reveal, PressableScale, Aurora, Shine, Breathe, PulseRing, TypingDots } from './theme';
 
 WebBrowser.maybeCompleteAuthSession();
 
-const ATU_BLUE = '#003087';
-const ATU_CYAN = '#00AEEF';
+const ATU_BLUE = C.blue;
+const ATU_CYAN = C.cyan;
+// Degradado azul de marca, unificado para todos los headers (midnight → ATU blue → sky)
+const HEADER_GRAD = GRAD.header;
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.round(SCREEN_H * 0.50);
 
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-// URI registrado en Google Cloud Console para el proxy de Expo Go
-const PROXY_URI = 'https://auth.expo.io/@djmunozromero/atu_rn';
+const isExpoGo = Constants.appOwnership === 'expo';
+// Proxy redirect - ensure it matches the value registered in Google Cloud Console
+const authProxyUri = `https://auth.expo.io/@${EXPO_USERNAME}/atu_rn`;
 
 const ATU_NEWS = [
   {
@@ -123,17 +128,99 @@ function buildMapSegments(legs, walk1, walk2) {
 
 // ── Splash ────────────────────────────────────────────────────────────────────
 function SplashScreen() {
+  const logo   = useRef(new Animated.Value(0)).current;  // logo scale/fade-in
+  const stripe = useRef(new Animated.Value(0)).current;  // cyan stripe sweep
+  useEffect(() => {
+    Animated.sequence([
+      Animated.spring(logo, { toValue: 1, friction: 6, tension: 60, useNativeDriver: true }),
+      Animated.timing(stripe, { toValue: 1, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, []);
+  const logoScale = logo.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] });
+  const stripeW   = stripe.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#003087', justifyContent: 'center', alignItems: 'center' }}>
+    <View style={{ flex: 1, backgroundColor: C.navy900, justifyContent: 'center', alignItems: 'center' }}>
       <StatusBar style="light" />
-      <View style={{ position: 'relative', flexDirection: 'row', alignItems: 'center' }}>
-        <Text style={{ color: '#fff', fontSize: 72, fontWeight: '900', letterSpacing: -4 }}>ATU</Text>
-        <View style={{ position: 'absolute', left: 0, right: 0, height: 10, backgroundColor: '#00AEEF', top: 44, opacity: 0.7 }} />
+      <Aurora />
+      <Animated.View style={{ opacity: logo, transform: [{ scale: logoScale }], alignItems: 'center' }}>
+        <View style={{ position: 'relative', flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 76, fontWeight: '900', letterSpacing: -5 }}>ATU</Text>
+          <Animated.View style={{ position: 'absolute', left: 0, width: stripeW, height: 11, backgroundColor: C.cyan, top: 47, borderRadius: 3 }} />
+        </View>
+        <Text style={{ color: 'rgba(255,255,255,0.62)', fontSize: 17, fontWeight: '700', letterSpacing: 5, marginTop: 10 }}>L I M A</Text>
+      </Animated.View>
+      <View style={{ marginTop: 54, alignItems: 'center', justifyContent: 'center' }}>
+        <PulseRing size={14} color={C.cyan} />
+        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.cyan }} />
       </View>
-      <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 18, fontWeight: '600', marginTop: 6 }}>Lima</Text>
-      <ActivityIndicator color="rgba(255,255,255,0.5)" style={{ marginTop: 48 }} />
     </View>
   );
+}
+
+// ── Transición de pantallas (Animated nativo, driver nativo = sin jank) ────────
+// mode: 'right' → avanzar (entra desde la derecha) · 'left' → retroceder (izq.)
+//       'up' → Yatu sube · 'down' → Yatu baja al cerrar · 'fade' → misma pestaña
+// Recorridos muy cortos + sin zoom = transición sutil que no marea
+const TRANS_DIST = { right: 14, left: -14, up: 18, down: -18, fade: 0 };
+function ScreenTransition({ routeKey, mode = 'fade', children }) {
+  const t = useRef(new Animated.Value(0)).current; // 0 = entrando · 1 = asentado
+  useEffect(() => {
+    t.setValue(0);
+    Animated.timing(t, {
+      toValue: 1, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true,
+    }).start();
+  }, [routeKey, mode]);
+
+  // El contenido aparece casi de inmediato (opaco al 50%) para que no se sienta lento
+  const opacity = t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 1, 1] });
+  const d = TRANS_DIST[mode] ?? 0;
+  const move = t.interpolate({ inputRange: [0, 1], outputRange: [d, 0] });
+  const transform = mode === 'up' || mode === 'down' ? [{ translateY: move }] : [{ translateX: move }];
+  return <Animated.View style={{ flex: 1, opacity, transform }}>{children}</Animated.View>;
+}
+
+// ── Brillo lento que recorre una tarjeta (efecto "shine") ──────────────────────
+function Shimmer({ band = 0.55, color = 'rgba(255,255,255,0.22)' }) {
+  const x = useRef(new Animated.Value(0)).current;
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    if (!w) return;
+    const loop = Animated.loop(Animated.sequence([
+      Animated.delay(1200),
+      Animated.timing(x, { toValue: 1, duration: 1700, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(x, { toValue: 0, duration: 0, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [w]);
+  const translateX = x.interpolate({ inputRange: [0, 1], outputRange: [-w * 0.8, w * 1.2] });
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none" onLayout={e => setW(e.nativeEvent.layout.width)}>
+      <Animated.View style={{ position: 'absolute', top: '-60%', bottom: '-60%', width: w * band, transform: [{ translateX }, { rotate: '18deg' }] }}>
+        <LinearGradient
+          colors={['rgba(255,255,255,0)', color, 'rgba(255,255,255,0)']}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+          style={{ flex: 1 }}
+        />
+      </Animated.View>
+    </View>
+  );
+}
+
+// ── Latido suave en bucle (para iconos / detalles vistosos) ────────────────────
+function Pulse({ children, style, min = 1, max = 1.07, duration = 1500 }) {
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(v, { toValue: 1, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(v, { toValue: 0, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, []);
+  const scale = v.interpolate({ inputRange: [0, 1], outputRange: [min, max] });
+  return <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -149,7 +236,7 @@ function getNativeRedirect(clientId) {
 const nativeClientId  = Platform.OS === 'ios' ? GOOGLE_IOS_CLIENT_ID : GOOGLE_ANDROID_CLIENT_ID;
 const nativeRedirect  = getNativeRedirect(nativeClientId);
 const authClientId    = isExpoGo ? GOOGLE_WEB_CLIENT_ID : (nativeClientId || GOOGLE_WEB_CLIENT_ID);
-const authRedirectUri = isExpoGo ? PROXY_URI : (nativeRedirect || PROXY_URI);
+const authRedirectUri = isExpoGo ? authProxyUri : (nativeRedirect || authProxyUri);
 
 export default function App() {
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -161,6 +248,7 @@ export default function App() {
     androidClientId: GOOGLE_ANDROID_CLIENT_ID || GOOGLE_WEB_CLIENT_ID,
     iosClientId:     GOOGLE_IOS_CLIENT_ID     || GOOGLE_WEB_CLIENT_ID,
     redirectUri:     authRedirectUri,
+    scopes:          ['openid', 'profile', 'email'],
     usePKCE:         !isExpoGo,
   });
 
@@ -172,6 +260,10 @@ export default function App() {
   }, [request]);
 
   useEffect(() => {
+    if (BYPASS_AUTH) {
+      setUser({ uid: 'bypass', displayName: 'Dev User', email: 'dev@example.com' });
+      return () => {};
+    }
     const unsub = onAuthStateChanged(auth, u => setUser(u ?? null));
     return unsub;
   }, []);
@@ -208,31 +300,8 @@ export default function App() {
   }, [response]);
 
   // Flujo proxy para Expo Go en iOS (auth.expo.io/start)
-  async function signInWithExpoGo() {
-    if (!request?.url) return;
-    try {
-      const nativeUrl = makeRedirectUri();
-      const startUrl = `${PROXY_URI}/start?${new URLSearchParams({ authUrl: request.url, returnUrl: nativeUrl })}`;
-      const result = await WebBrowser.openAuthSessionAsync(startUrl, nativeUrl);
-      if (result.type !== 'success') return;
-      const parsed = request.parseReturnUrl(result.url);
-      if (parsed.type !== 'success') {
-        if (parsed.error) Alert.alert('Error de Google', parsed.error.message || 'No se pudo completar el acceso');
-        return;
-      }
-      const tokenResponse = await exchangeCodeAsync(
-        { clientId: GOOGLE_WEB_CLIENT_ID, clientSecret: GOOGLE_CLIENT_SECRET, code: parsed.params.code, redirectUri: PROXY_URI },
-        Google.discovery
-      );
-      const credential = GoogleAuthProvider.credential(tokenResponse.idToken);
-      await signInWithCredential(auth, credential);
-    } catch (e) {
-      Alert.alert('Error al iniciar sesión', e.message);
-    }
-  }
-
   if (user === undefined) return <SplashScreen />;
-  if (!user) return <LoginScreen onSignIn={isExpoGo ? signInWithExpoGo : () => promptAsync()} loading={!request} />;
+  if (!user) return <LoginScreen onSignIn={() => promptAsync({ useProxy: isExpoGo })} loading={!request} loginDisabled={!ENABLE_GOOGLE_LOGIN} />;
   return <MainApp user={user} />;
 }
 
@@ -534,37 +603,62 @@ function MainApp({ user }) {
     planWithDest(destination);
   }
 
+  // ── Dirección de la transición según el contexto de navegación ──────────────
+  const prevScreenRef = useRef('home');
+  const prevTabRef    = useRef(tab);
+  useEffect(() => { prevScreenRef.current = screen; }, [screen]);
+  useEffect(() => { prevTabRef.current = tab; }, [tab]);
+  const ORDER = { home: 0, picker: 1, results: 2 };
+  const deepMode = (ORDER[screen] ?? 1) >= (ORDER[prevScreenRef.current] ?? 0) ? 'right' : 'left';
+  let homeMode = 'fade';
+  if (prevScreenRef.current === 'yatu') homeMode = 'down';
+  else if (prevScreenRef.current === 'picker' || prevScreenRef.current === 'results') homeMode = 'left';
+  else {
+    const ci = NAV_TABS.findIndex(t => t.key === tab);
+    const pi = NAV_TABS.findIndex(t => t.key === prevTabRef.current);
+    homeMode = ci > pi ? 'right' : ci < pi ? 'left' : 'fade';
+  }
+
   if (screen === 'yatu') {
-    return <YatuScreen onBack={() => setScreen('home')} user={user} />;
+    return (
+      <ScreenTransition routeKey="yatu" mode="up">
+        <YatuScreen onBack={() => setScreen('home')} user={user} />
+      </ScreenTransition>
+    );
   }
 
   if (screen === 'picker') {
     return (
-      <RoutePickerScreen
-        alternatives={alternatives}
-        destination={destination}
-        planning={planning}
-        onBack={() => setScreen('home')}
-        onSelect={handleAlternativeSelect}
-      />
+      <ScreenTransition routeKey="picker" mode={deepMode}>
+        <RoutePickerScreen
+          alternatives={alternatives}
+          destination={destination}
+          planning={planning}
+          onBack={() => setScreen('home')}
+          onSelect={handleAlternativeSelect}
+        />
+      </ScreenTransition>
     );
   }
 
   if (screen === 'results') {
     return (
-      <ResultScreen
-        journey={journey} taxi={taxi} transit={transit}
-        buses={buses} connected={connected}
-        userLat={userLat} userLng={userLng} destination={destination}
-        onBack={() => setScreen('picker')}
-        resultTab={resultTab} setResultTab={setResultTab} error={error}
-        busTypes={busTypes}
-      />
+      <ScreenTransition routeKey="results" mode={deepMode}>
+        <ResultScreen
+          journey={journey} taxi={taxi} transit={transit}
+          buses={buses} connected={connected}
+          userLat={userLat} userLng={userLng} destination={destination}
+          onBack={() => setScreen('picker')}
+          resultTab={resultTab} setResultTab={setResultTab} error={error}
+          busTypes={busTypes}
+        />
+      </ScreenTransition>
     );
   }
 
   return (
     <View style={{ flex: 1 }}>
+      <ScreenTransition routeKey={tab} mode={homeMode}>
       {tab === 'billetera'
         ? <BilleteraScreen user={user} onSignOut={() => signOut(auth)} />
         : tab === 'noticias'
@@ -591,14 +685,12 @@ function MainApp({ user }) {
                 onGoNoticias={() => setTab('noticias')}
               />
       }
+      </ScreenTransition>
       <BottomNav tab={tab} setTab={setTab} />
 
       {/* FAB Yatu — visible en Noticias, Alertas y Billetera */}
       {(tab === 'noticias' || tab === 'alertas' || tab === 'billetera') && (
-        <TouchableOpacity style={fabSt.fab} activeOpacity={0.88} onPress={() => setScreen('yatu')}>
-          <Ionicons name="sparkles" size={17} color="#fff" />
-          <Text style={fabSt.fabTxt}>Yatu</Text>
-        </TouchableOpacity>
+        <YatuFab key={tab} onPress={() => setScreen('yatu')} />
       )}
 
       <VerTodasModal
@@ -678,7 +770,7 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
       <StatusBar style="light" />
 
       {/* ── HEADER UNIFICADO: logo · location · search · yatu ── */}
-      <View style={hs.header}>
+      <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hs.header}>
         {/* Fila superior: ubicación + peak + avatar */}
         <View style={hs.headerTop}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
@@ -694,7 +786,7 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
             </View>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-            {peak && <View style={hs.peakPill}><Text style={hs.peakTxt}>{peak.icon} {peak.label}</Text></View>}
+            {peak && <View style={hs.peakPill}><Ionicons name="ellipse" size={7} color={peak.color} /><Text style={hs.peakTxt}>{peak.label}</Text></View>}
             <View style={hs.avatarCircle}>
               <Text style={hs.avatarTxt}>{(user?.displayName?.[0] || user?.email?.[0] || 'U').toUpperCase()}</Text>
             </View>
@@ -702,32 +794,36 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
         </View>
 
         {/* Barra de búsqueda — toca para abrir modal */}
-        <TouchableOpacity style={hs.searchBar} activeOpacity={0.88}
-          onPress={() => setSearchModalOpen(true)}>
-          <Ionicons name="search-outline" size={20} color="#1668AD" />
-          <Text style={[hs.searchInput, { color: query ? '#0E2147' : '#8895AE', marginLeft: 10, flex: 1 }]} numberOfLines={1}>
-            {query || '¿A dónde quieres ir?'}
-          </Text>
-          {query.length > 0
-            ? <Ionicons name="close-circle" size={18} color="#9ca3af" />
-            : <Ionicons name="mic-outline" size={19} color="#8895AE" />
-          }
-        </TouchableOpacity>
+        <Reveal delay={90}>
+          <TouchableOpacity style={hs.searchBar} activeOpacity={0.88}
+            onPress={() => setSearchModalOpen(true)}>
+            <Ionicons name="search-outline" size={20} color={C.blueBright} />
+            <Text style={[hs.searchInput, { color: query ? C.text : C.textFaint, marginLeft: 10, flex: 1 }]} numberOfLines={1}>
+              {query || '¿A dónde quieres ir?'}
+            </Text>
+            {query.length > 0
+              ? <Ionicons name="close-circle" size={18} color="#9ca3af" />
+              : <Ionicons name="mic-outline" size={19} color={C.textFaint} />
+            }
+          </TouchableOpacity>
+        </Reveal>
 
         {/* Botón Yatu — dentro del header */}
-        <TouchableOpacity style={hs.yatuBtn} activeOpacity={0.85} onPress={onGoYatu}>
-          <View style={hs.yatuIconBox}>
-            <Ionicons name="sparkles" size={16} color="#fff" />
-          </View>
-          <Text style={hs.yatuTxt}>
-            ¿Qué bus o qué letra tomar?{'  '}<Text style={hs.yatuBold}>Pregúntale a Yatu</Text>
-          </Text>
-          <Ionicons name="chevron-forward" size={15} color="#9FB4D6" />
-        </TouchableOpacity>
-      </View>
+        <Reveal delay={180}>
+          <TouchableOpacity style={hs.yatuBtn} activeOpacity={0.85} onPress={onGoYatu}>
+            <Breathe style={hs.yatuIconBox} min={1} max={1.12} duration={1700}>
+              <Ionicons name="sparkles" size={16} color="#fff" />
+            </Breathe>
+            <Text style={hs.yatuTxt}>
+              ¿Qué bus o qué letra tomar?{'  '}<Text style={hs.yatuBold}>Pregúntale a Yatu</Text>
+            </Text>
+            <Ionicons name="chevron-forward" size={15} color="#9FB4D6" />
+          </TouchableOpacity>
+        </Reveal>
+      </LinearGradient>
 
       {/* ── MAPA (fondo claro, alerta flotante, botón locate) ── */}
-      <View style={hs.mapBig}>
+      <Reveal delay={260} distance={22} style={hs.mapBig}>
         {gpsReady && userLat && userLng ? (
           <RouteMapView
             segments={[]}
@@ -742,7 +838,7 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
             <Text style={hs.mapLoadingTxt}>Cargando mapa...</Text>
           </View>
         )}
-      </View>
+      </Reveal>
 
       {/* planning indicator — sutil, sin bloquear la pantalla */}
       {planning && (
@@ -756,52 +852,67 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
 
         {/* Recientes */}
         {recents.length > 0 && (
-          <View style={hs.section}>
+          <Reveal delay={340} style={hs.section}>
             <Text style={hs.sectionTitle}>Recientes</Text>
             <View style={hs.listCard}>
               {recents.slice(0, 2).map((r, i) => (
                 <TouchableOpacity key={i} style={[hs.recentRow, i < Math.min(recents.length, 2) - 1 && hs.recentBorder]}
                   onPress={() => onSelectRecent(r)}>
-                  <View style={hs.recentIconBox}><Text style={{ fontSize: 16 }}>🕐</Text></View>
+                  <View style={hs.recentIconBox}><Ionicons name="time-outline" size={18} color={ATU_BLUE} /></View>
                   <Text style={hs.recentTxt} numberOfLines={1}>{r.name || 'Destino'}</Text>
                   <Text style={hs.recentArrow}>›</Text>
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
+          </Reveal>
         )}
 
 
         {/* Acceso rápido a Noticias */}
         {noticiasLoaded && (campanas.length > 0 || noticias.length > 0) && (
-          <TouchableOpacity style={hs.noticiasTeaser} activeOpacity={0.88} onPress={onGoNoticias}>
-            <View style={hs.noticiasTeaserLeft}>
-              <Ionicons name="newspaper" size={18} color={ATU_BLUE} />
-              <View>
-                <Text style={hs.noticiasTeaserTitle}>Campañas y noticias</Text>
-                <Text style={hs.noticiasTeaserSub}>{(campanas.length + noticias.length)} publicaciones · toca para ver</Text>
+          <Reveal delay={420}>
+            <TouchableOpacity style={hs.noticiasTeaser} activeOpacity={0.88} onPress={onGoNoticias}>
+              <View style={hs.noticiasTeaserLeft}>
+                <View style={hs.teaserIconBox}>
+                  <Ionicons name="newspaper" size={18} color={C.blueBright} />
+                </View>
+                <View>
+                  <Text style={hs.noticiasTeaserTitle}>Campañas y noticias</Text>
+                  <Text style={hs.noticiasTeaserSub}>{(campanas.length + noticias.length)} publicaciones · toca para ver</Text>
+                </View>
               </View>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color="#C5CDD8" />
-          </TouchableOpacity>
+              <Ionicons name="chevron-forward" size={16} color="#C5CDD8" />
+            </TouchableOpacity>
+          </Reveal>
         )}
 
         <View style={{ height: 16 }} />
       </ScrollView>
 
       {/* ── BOTÓN PAGAR QR ── */}
-      <TouchableOpacity style={hs.payBar} activeOpacity={0.88} onPress={() => setShowHomeQR(true)}>
-        {/* Caja icono QR */}
-        <View style={hs.payBarIconBox}>
+      <TouchableOpacity style={hs.payBar} activeOpacity={0.9} onPress={() => setShowHomeQR(true)}>
+        <LinearGradient colors={['#1A7BE0', '#0A4FB8', '#072C6E']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hs.payBarGrad} />
+        {/* Círculos decorativos para dar profundidad (recortados por el radio) */}
+        <View style={hs.payCircle1} />
+        <View style={hs.payCircle2} />
+        <Shimmer band={0.5} color="rgba(255,255,255,0.32)" />
+        {/* Caja icono QR — late suavemente */}
+        <Pulse style={hs.payBarIconBox} min={1} max={1.07} duration={1500}>
           <Ionicons name="qr-code" size={22} color="#fff" />
-        </View>
+        </Pulse>
         {/* Texto */}
         <View style={{ flex: 1 }}>
           <Text style={hs.payBarTitle}>Pagar pasaje · QR</Text>
-          <Text style={hs.payBarSub}>Tarjeta ATU interoperable</Text>
+          <View style={hs.payBarSubRow}>
+            <Ionicons name="wifi-outline" size={11} color="#9FC1F5" />
+            <Text style={hs.payBarSub}>Tarjeta ATU · NFC activo</Text>
+          </View>
         </View>
         {/* Saldo */}
-        <Text style={hs.payBarAmount}>S/ 24.50</Text>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={hs.payBarSaldoLabel}>Saldo</Text>
+          <Text style={hs.payBarAmount}>S/ 24.50</Text>
+        </View>
       </TouchableOpacity>
 
       {/* ── MODAL QR (desde inicio) ── */}
@@ -820,7 +931,9 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
               <WebView source={{ html: QR_HTML }} style={wl.qrWebView} scrollEnabled={false} originWhitelist={['*']} />
             </View>
             <View style={wl.nfcRow}>
-              <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
+              <Breathe min={1} max={1.18} duration={1300}>
+                <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
+              </Breathe>
               <Text style={wl.nfcTxt}>NFC activado · acerca tu teléfono</Text>
             </View>
             <View style={wl.qrInfoRow}>
@@ -1180,6 +1293,7 @@ function RoutePickerScreen({ alternatives, destination, planning, onBack, onSele
     <View style={pick.root}>
       <StatusBar style="light" />
       <View style={pick.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <TouchableOpacity onPress={onBack} style={pick.backBtn} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
@@ -1200,7 +1314,9 @@ function RoutePickerScreen({ alternatives, destination, planning, onBack, onSele
         <ScrollView contentContainerStyle={pick.list} showsVerticalScrollIndicator={false}>
           <Text style={pick.sectionTitle}>Elige cómo llegar</Text>
           {alternatives.map((alt, i) => (
-            <RouteOptionCard key={i} alt={alt} index={i} onSelect={() => onSelect(alt)} />
+            <Reveal key={i} delay={i * 100} distance={22}>
+              <RouteOptionCard alt={alt} index={i} onSelect={() => onSelect(alt)} />
+            </Reveal>
           ))}
           <View style={{ height: 24 }} />
         </ScrollView>
@@ -1308,6 +1424,7 @@ function NoticiasScreen({ campanas, noticias, noticiasLoaded }) {
       <StatusBar style="light" />
       {/* Header */}
       <View style={ns.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <Text style={ns.headerTitle}>Noticias</Text>
         <Text style={ns.headerSub}>Campañas y actualizaciones ATU</Text>
         {/* Tabs */}
@@ -1332,7 +1449,11 @@ function NoticiasScreen({ campanas, noticias, noticiasLoaded }) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={ns.list}>
-          {items.map((n, i) => <NoticiasCard key={n.id ?? i} n={n} />)}
+          {items.map((n, i) => (
+            <Reveal key={n.id ?? i} delay={i * 90} distance={20}>
+              <NoticiasCard n={n} />
+            </Reveal>
+          ))}
           <View style={{ height: 24 }} />
         </ScrollView>
       )}
@@ -1350,7 +1471,7 @@ const ns = StyleSheet.create({
   tabBtnActive:  { backgroundColor: '#F4F6FA' },
   tabTxt:        { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.55)' },
   tabTxtActive:  { color: ATU_BLUE },
-  list:          { padding: 16, gap: 16 },
+  list:          { padding: 16, gap: 16, paddingBottom: 120 },
   card:          { backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.09, shadowRadius: 8, elevation: 3 },
   cardImg:       { width: '100%', height: 180, overflow: 'hidden' },
   skeleton:      { backgroundColor: '#D8DFE9' },
@@ -1373,19 +1494,73 @@ const NAV_TABS = [
   { key: 'alertas',   iconOn: 'notifications', iconOff: 'notifications-outline', label: 'Alertas'   },
   { key: 'billetera', iconOn: 'wallet',        iconOff: 'wallet-outline',        label: 'Billetera' },
 ];
-function BottomNav({ tab, setTab }) {
+function NavItem({ t, active, onPress }) {
+  const a     = useRef(new Animated.Value(active ? 1 : 0)).current; // estado activo
+  const press = useRef(new Animated.Value(1)).current;             // feedback de toque
+  useEffect(() => {
+    Animated.spring(a, { toValue: active ? 1 : 0, friction: 7, tension: 160, useNativeDriver: true }).start();
+  }, [active]);
+  const pillScale = a.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+  const iconLift  = a.interpolate({ inputRange: [0, 1], outputRange: [0, -2] });
   return (
-    <View style={hs.bottomNav}>
-      {NAV_TABS.map(t => {
-        const active = tab === t.key;
-        return (
-          <TouchableOpacity key={t.key} style={hs.navItem} onPress={() => setTab(t.key)} activeOpacity={0.75}>
-            <Ionicons name={active ? t.iconOn : t.iconOff} size={24} color={active ? ATU_BLUE : '#9ca3af'} />
-            <Text style={[hs.navLabel, active && { color: ATU_BLUE, fontWeight: '700' }]}>{t.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
+    <TouchableOpacity
+      style={hs.navItem} activeOpacity={1} onPress={onPress}
+      onPressIn={()  => Animated.spring(press, { toValue: 0.82, friction: 7, useNativeDriver: true }).start()}
+      onPressOut={() => Animated.spring(press, { toValue: 1, friction: 4, tension: 150, useNativeDriver: true }).start()}
+    >
+      <Animated.View style={[hs.navPillWrap, { transform: [{ scale: press }] }]}>
+        <Animated.View style={[hs.navPillBg, { opacity: a, transform: [{ scale: pillScale }] }]}>
+          <LinearGradient colors={GRAD.accent} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hs.navPillFill} />
+        </Animated.View>
+        <Animated.View style={{ transform: [{ translateY: iconLift }] }}>
+          <Ionicons name={active ? t.iconOn : t.iconOff} size={21} color={active ? '#fff' : '#6A7894'} />
+        </Animated.View>
+      </Animated.View>
+      <Text style={[hs.navLabel, active && hs.navLabelActive]}>{t.label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function BottomNav({ tab, setTab }) {
+  const enter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.spring(enter, { toValue: 1, friction: 8, tension: 55, useNativeDriver: true }).start();
+  }, []);
+  const translateY = enter.interpolate({ inputRange: [0, 1], outputRange: [120, 0] });
+  return (
+    <Animated.View style={[hs.navWrap, { opacity: enter, transform: [{ translateY }] }]} pointerEvents="box-none">
+      <View style={hs.navShadow}>
+        <BlurView intensity={38} tint="light" style={hs.navBlur}>
+          <View style={hs.navInner}>
+            {NAV_TABS.map(t => (
+              <NavItem key={t.key} t={t} active={tab === t.key} onPress={() => setTab(t.key)} />
+            ))}
+          </View>
+        </BlurView>
+      </View>
+    </Animated.View>
+  );
+}
+
+// FAB Yatu animado — aparece con pop, rebota al pulsar
+function YatuFab({ onPress }) {
+  const enter = useRef(new Animated.Value(0)).current;
+  const press = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.spring(enter, { toValue: 1, friction: 6, tension: 90, useNativeDriver: true }).start();
+  }, []);
+  return (
+    <Animated.View style={[fabSt.fab, { opacity: enter, transform: [{ scale: Animated.multiply(enter, press) }] }]}>
+      <TouchableOpacity
+        activeOpacity={0.9} onPress={onPress} style={fabSt.fabInner}
+        onPressIn={()  => Animated.spring(press, { toValue: 0.9, friction: 7, useNativeDriver: true }).start()}
+        onPressOut={() => Animated.spring(press, { toValue: 1, friction: 4, useNativeDriver: true }).start()}
+      >
+        <LinearGradient colors={GRAD.accent} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={fabSt.fabGrad} />
+        <Ionicons name="sparkles" size={17} color="#fff" />
+        <Text style={fabSt.fabTxt}>Yatu</Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -1482,10 +1657,14 @@ function AlertasScreen({ incidents, connected, userLat, userLng }) {
       <StatusBar style="light" />
       {/* Header — solo fila del título (igual que home) */}
       <View style={al.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <View style={al.headerTitleRow}>
           <Text style={al.headerTitle}>Alertas en vivo</Text>
           <View style={al.enRutaBadge}>
-            <View style={al.enRutaDot} />
+            <View style={{ width: 9, height: 9, alignItems: 'center', justifyContent: 'center' }}>
+              <PulseRing size={9} color={C.cyan} />
+              <View style={al.enRutaDot} />
+            </View>
             <Text style={al.enRutaTxt}>En tu ruta</Text>
           </View>
         </View>
@@ -1532,7 +1711,7 @@ function AlertasScreen({ incidents, connected, userLat, userLng }) {
             : null;
           const isNearby = nearbyKm !== null && nearbyKm < 2.0;
           return (
-            <View key={inc.id ?? i} style={[al.card, { borderColor: cfg.border }]}>
+            <Reveal key={inc.id ?? i} delay={Math.min(i, 6) * 80} distance={18} style={[al.card, { borderColor: cfg.border }]}>
               {/* Cabecera colorida solo en GRAVE */}
               {isGrave ? (
                 <View style={[al.cardHeader, { backgroundColor: cfg.bg }]}>
@@ -1595,7 +1774,7 @@ function AlertasScreen({ incidents, connected, userLat, userLng }) {
                   </>
                 )}
               </View>
-            </View>
+            </Reveal>
           );
         })}
         <View style={{ height: 24 }} />
@@ -1721,6 +1900,7 @@ function BilleteraScreen({ user, onSignOut }) {
     <View style={wl.root}>
       <StatusBar style="light" />
       <View style={wl.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <View style={wl.headerRow}>
           <Text style={wl.headerTitle}>Billetera</Text>
           <TouchableOpacity
@@ -1736,14 +1916,19 @@ function BilleteraScreen({ user, onSignOut }) {
         </View>
 
         {/* ── Tarjeta ATU ── */}
+        <Reveal delay={140} distance={24}>
         <View style={wl.card}>
           {/* Círculos decorativos */}
           <View style={wl.cardCircle1} />
           <View style={wl.cardCircle2} />
+          {/* Brillo premium recorriendo la tarjeta */}
+          <Shine band={0.45} color="rgba(255,255,255,0.18)" delay={1400} />
           {/* Contenido */}
           <View style={wl.cardRow}>
             <Text style={wl.cardLabel}>Tarjeta ATU · Interoperable</Text>
-            <Ionicons name="wifi" size={22} color="#5BBDF5" />
+            <Breathe min={1} max={1.14} duration={1600}>
+              <Ionicons name="wifi" size={22} color="#5BBDF5" />
+            </Breathe>
           </View>
           <View style={wl.chip} />
           <Text style={wl.cardNumber}>5021 •••• •••• 4821</Text>
@@ -1755,9 +1940,10 @@ function BilleteraScreen({ user, onSignOut }) {
             <Text style={wl.cardName}>{nombre}</Text>
           </View>
         </View>
+        </Reveal>
 
         {/* Botones */}
-        <View style={wl.btnRow}>
+        <Reveal delay={260} style={wl.btnRow}>
           <TouchableOpacity style={wl.btnPrimary} onPress={() => setShowQR(true)} activeOpacity={0.88}>
             <Ionicons name="qr-code" size={17} color="#fff" />
             <Text style={wl.btnPrimaryTxt}>Pagar · QR</Text>
@@ -1766,13 +1952,14 @@ function BilleteraScreen({ user, onSignOut }) {
             <Ionicons name="add-circle-outline" size={17} color="#fff" />
             <Text style={wl.btnSecondaryTxt}>Recargar</Text>
           </TouchableOpacity>
-        </View>
+        </Reveal>
       </View>
 
       <ScrollView contentContainerStyle={wl.body}>
         <Text style={wl.movTitle}>Movimientos</Text>
         {movimientos.map((m, i) => (
-          <View key={i} style={[wl.movRow, i < movimientos.length - 1 && wl.movBorder]}>
+          <Reveal key={i} delay={360 + i * 90} from="right" distance={20}
+            style={[wl.movRow, i < movimientos.length - 1 && wl.movBorder]}>
             <View style={[wl.movBadge, { backgroundColor: m.bg }]}>
               <Text style={wl.movBadgeTxt} numberOfLines={1}>{m.tipo}</Text>
             </View>
@@ -1781,7 +1968,7 @@ function BilleteraScreen({ user, onSignOut }) {
               <Text style={wl.movCuando}>{m.cuando}</Text>
             </View>
             <Text style={[wl.movMonto, { color: m.montoColor }]}>{m.monto}</Text>
-          </View>
+          </Reveal>
         ))}
       </ScrollView>
 
@@ -1811,7 +1998,9 @@ function BilleteraScreen({ user, onSignOut }) {
 
             {/* NFC */}
             <View style={wl.nfcRow}>
-              <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
+              <Breathe min={1} max={1.18} duration={1300}>
+                <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
+              </Breathe>
               <Text style={wl.nfcTxt}>NFC activado · acerca tu teléfono</Text>
             </View>
 
@@ -1865,6 +2054,7 @@ function TarjetaScreen({ onBack }) {
     <View style={ta.root}>
       <StatusBar style="light" />
       <View style={ta.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <TouchableOpacity onPress={onBack} style={ta.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Ionicons name="chevron-back" size={24} color="#fff" />
         </TouchableOpacity>
@@ -1874,11 +2064,13 @@ function TarjetaScreen({ onBack }) {
 
       <ScrollView contentContainerStyle={ta.content} showsVerticalScrollIndicator={false}>
         {/* Card visual */}
+        <Reveal delay={120} distance={24}>
         <View style={ta.card}>
           {/* Background decorations */}
           <View style={ta.cardCircle1} />
           <View style={ta.cardCircle2} />
           <View style={ta.cardStripe} />
+          <Shine band={0.45} color="rgba(0,174,239,0.14)" delay={1400} />
 
           {/* Header */}
           <View style={ta.cardTop}>
@@ -1919,9 +2111,10 @@ function TarjetaScreen({ onBack }) {
             <Text style={ta.cardExpiry}>12/27</Text>
           </View>
         </View>
+        </Reveal>
 
         {/* Quick stats */}
-        <View style={ta.statsRow}>
+        <Reveal delay={240} style={ta.statsRow}>
           <View style={ta.statBox}>
             <Text style={ta.statVal}>47</Text>
             <Text style={ta.statLbl}>Viajes este mes</Text>
@@ -1936,7 +2129,7 @@ function TarjetaScreen({ onBack }) {
             <Text style={ta.statVal}>dic 2026</Text>
             <Text style={ta.statLbl}>Válida hasta</Text>
           </View>
-        </View>
+        </Reveal>
 
         {/* Recargar */}
         <View style={ta.section}>
@@ -2431,7 +2624,7 @@ const al = StyleSheet.create({
   mapPlaceholderTxt:  { color: '#6b7280', fontSize: 12, fontWeight: '600' },
   mapIncidentBadge:   { position: 'absolute', top: 10, left: 10, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FCEFD6', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4, elevation: 3 },
   mapIncidentBadgeTxt:{ fontSize: 11.5, fontWeight: '800', color: '#A9690A' },
-  list:               { padding: 16, gap: 12 },
+  list:               { padding: 16, gap: 12, paddingBottom: 120 },
   emptyBox:       { alignItems: 'center', paddingTop: 80, gap: 12 },
   emptyTitle:     { fontSize: 20, fontWeight: '800', color: '#111' },
   emptySub:       { fontSize: 14, color: '#6b7280', textAlign: 'center', lineHeight: 20 },
@@ -2523,7 +2716,7 @@ const hs = StyleSheet.create({
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, gap: 16 },
 
   // ── Header unificado (logo · ubicación · search · yatu) ──────────────────
-  header:       { backgroundColor: '#0C1E40', paddingTop: 50, paddingHorizontal: 18, paddingBottom: 13 },
+  header:       { backgroundColor: '#0C1E40', paddingTop: 50, paddingHorizontal: 18, paddingBottom: 16, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
   headerTop:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 },
   logoBox:      { flexDirection: 'row', alignItems: 'center', position: 'relative' },
   logoA:        { color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -1, zIndex: 2 },
@@ -2531,12 +2724,12 @@ const hs = StyleSheet.create({
   logoTU:       { color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -1, zIndex: 2 },
   locChip:      { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.09)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5, marginLeft: 8 },
   locationTxt:  { color: 'rgba(255,255,255,0.88)', fontSize: 12.5, fontWeight: '700' },
-  peakPill:     { backgroundColor: 'rgba(255,255,255,0.13)', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 4 },
+  peakPill:     { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,255,255,0.13)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   peakTxt:      { color: '#fff', fontSize: 10.5, fontWeight: '700' },
   avatarCircle: { width: 33, height: 33, borderRadius: 17, backgroundColor: ATU_CYAN, alignItems: 'center', justifyContent: 'center' },
   avatarTxt:    { color: '#fff', fontSize: 14, fontWeight: '900' },
   // Search bar dentro del header
-  searchBar:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 0, height: 52, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.22, shadowRadius: 10, elevation: 5 },
+  searchBar:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 0, height: 52, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.22, shadowRadius: 10, elevation: 5 },
   searchInput:  { flex: 1, color: '#0E2147', fontSize: 15.5, fontWeight: '600', paddingVertical: 0, marginLeft: 10, marginRight: 6 },
   // Sugerencias (dentro del header, bajo el searchBar)
   suggestionsBox:  { backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden', marginBottom: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
@@ -2547,12 +2740,12 @@ const hs = StyleSheet.create({
   suggestSub:      { color: '#8895AE', fontSize: 12, marginTop: 1 },
   // Yatu dentro del header
   yatuBtn:         { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 13, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: 'rgba(91,189,245,0.14)' },
-  yatuIconBox:     { width: 30, height: 30, borderRadius: 9, backgroundColor: '#2468B8', alignItems: 'center', justifyContent: 'center' },
+  yatuIconBox:     { width: 30, height: 30, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' },
   yatuTxt:         { flex: 1, fontSize: 12.5, fontWeight: '600', color: '#CFE0F5' },
   yatuBold:        { fontSize: 12.5, fontWeight: '800', color: '#fff' },
 
   // ── Mapa grande ──────────────────────────────────────────────────────────
-  mapBig:          { height: 340, overflow: 'hidden', position: 'relative' },
+  mapBig:          { height: 300, marginHorizontal: 14, marginTop: 12, borderRadius: 26, overflow: 'hidden', position: 'relative', shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 16, elevation: 6 },
   mapLoading:      { flex: 1, backgroundColor: '#E9EDE3', justifyContent: 'center', alignItems: 'center', gap: 8 },
   mapLoadingTxt:   { color: '#6b7280', fontSize: 12, fontWeight: '600' },
   mapAlertBar:     { position: 'absolute', top: 10, left: 10, right: 10, backgroundColor: '#fff', borderRadius: 13, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#0E2147', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.14, shadowRadius: 8, elevation: 4 },
@@ -2570,11 +2763,16 @@ const hs = StyleSheet.create({
   planBtnTxt:    { color: '#fff', fontWeight: '800', fontSize: 15, letterSpacing: 0.3 },
 
   // ── Barra de pago ─────────────────────────────────────────────────────────
-  payBar:        { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#1F5396', marginHorizontal: 14, marginBottom: 10, borderRadius: 17, paddingHorizontal: 16, height: 64, shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 8 },
-  payBarIconBox: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#2468B8', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  payBarTitle:   { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: -0.2 },
-  payBarSub:     { color: '#8FA3C4', fontSize: 11, fontWeight: '600', marginTop: 2 },
-  payBarAmount:  { color: ATU_CYAN, fontSize: 20, fontWeight: '800', letterSpacing: -0.5 },
+  payBar:        { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#1F5396', overflow: 'hidden', marginHorizontal: 14, marginBottom: 100, borderRadius: 24, paddingHorizontal: 16, height: 72, shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 8 },
+  payBarGrad:    { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, borderRadius: 24 },
+  payBarIconBox: { width: 42, height: 42, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  payBarTitle:   { color: '#fff', fontSize: 15.5, fontWeight: '800', letterSpacing: -0.2 },
+  payBarSubRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  payBarSub:     { color: '#9FC1F5', fontSize: 11, fontWeight: '600' },
+  payBarSaldoLabel: { color: '#9FC1F5', fontSize: 9, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' },
+  payBarAmount:  { color: '#fff', fontSize: 20, fontWeight: '900', letterSpacing: -0.5, marginTop: 1 },
+  payCircle1:    { position: 'absolute', width: 130, height: 130, borderRadius: 65, backgroundColor: 'rgba(255,255,255,0.08)', right: -26, top: -56 },
+  payCircle2:    { position: 'absolute', width: 90, height: 90, borderRadius: 45, backgroundColor: 'rgba(255,255,255,0.06)', right: 78, bottom: -46 },
 
   // ── Secciones ─────────────────────────────────────────────────────────────
   section:       { gap: 10 },
@@ -2583,7 +2781,7 @@ const hs = StyleSheet.create({
   sectionMore:   { color: ATU_BLUE, fontSize: 13, fontWeight: '700' },
 
   // Recents
-  listCard:    { backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 5, elevation: 2 },
+  listCard:    { backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 5, elevation: 2 },
   recentRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 14 },
   recentBorder:{ borderBottomWidth: 1, borderBottomColor: '#F1F4F9' },
   recentIconBox:{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#EEF3F9', justifyContent: 'center', alignItems: 'center' },
@@ -2592,7 +2790,7 @@ const hs = StyleSheet.create({
 
   // Carousels
   carouselContent:  { paddingLeft: 4, paddingRight: 16, gap: 14 },
-  carouselCard:     { width: 240, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.09, shadowRadius: 8, elevation: 3 },
+  carouselCard:     { width: 240, backgroundColor: '#fff', borderRadius: 20, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.09, shadowRadius: 8, elevation: 3 },
   carouselImgWrap:  { height: 140, position: 'relative' },
   carouselRealImg:  { width: '100%', height: 140 },
   carouselImg:      { height: 140, justifyContent: 'center', alignItems: 'center' },
@@ -2604,15 +2802,22 @@ const hs = StyleSheet.create({
   carouselTitle:    { color: '#0E2147', fontSize: 14, fontWeight: '800', lineHeight: 19 },
   carouselBody:     { color: '#6b7280', fontSize: 12, lineHeight: 17 },
 
-  // Bottom nav
-  bottomNav: { flexDirection: 'row', backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#EAEEF4', paddingBottom: 20, paddingTop: 10 },
-  navItem:   { flex: 1, alignItems: 'center', gap: 3 },
-  navIcon:   { fontSize: 22, color: '#9ca3af' },
-  navLabel:  { fontSize: 11, color: '#9ca3af', fontWeight: '500' },
+  // Bottom nav — liquid glass dock flotante
+  navWrap:        { position: 'absolute', left: 16, right: 16, bottom: 26 },
+  navShadow:      { borderRadius: 30, shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.22, shadowRadius: 24, elevation: 16 },
+  navBlur:        { borderRadius: 30, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.55)' },
+  navInner:       { flexDirection: 'row', alignItems: 'center', height: 66, paddingHorizontal: 6, backgroundColor: 'rgba(247,250,253,0.62)' },
+  navItem:        { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3 },
+  navPillWrap:    { width: 46, height: 34, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  navPillBg:      { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, borderRadius: 13, overflow: 'hidden', shadowColor: ATU_BLUE, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
+  navPillFill:    { flex: 1, borderRadius: 13 },
+  navLabel:       { fontSize: 10.5, color: '#6A7894', fontWeight: '600', letterSpacing: 0.1 },
+  navLabelActive: { color: ATU_BLUE, fontWeight: '800' },
 
   // Teaser noticias
-  noticiasTeaser:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 5, elevation: 2 },
+  noticiasTeaser:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 13, shadowColor: '#0A1F4D', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 3 },
   noticiasTeaserLeft:   { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  teaserIconBox:        { width: 38, height: 38, borderRadius: 12, backgroundColor: '#EEF4FF', alignItems: 'center', justifyContent: 'center' },
   noticiasTeaserTitle:  { fontSize: 14, fontWeight: '800', color: '#0E2147' },
   noticiasTeaserSub:    { fontSize: 11.5, fontWeight: '600', color: '#8895AE', marginTop: 2 },
 
@@ -2656,7 +2861,7 @@ const hs = StyleSheet.create({
 // ── Result styles (dark theme) ────────────────────────────────────────────────
 const rs = StyleSheet.create({
   // Root: relative so children can position absolute on top of map
-  root:          { flex: 1, flexDirection: 'column', backgroundColor: '#161b22' },
+  root:          { flex: 1, flexDirection: 'column', backgroundColor: '#081A3A' },
   mapWrap:       { flex: 1 },  // ocupa solo el espacio sobre el sheet
 
   // Overlay de botones encima del mapa (relativo a mapWrap)
@@ -2670,12 +2875,12 @@ const rs = StyleSheet.create({
   // Sheet en flujo normal debajo del mapa — ya no es absolute
   sheet: {
     height: SHEET_H,
-    backgroundColor: '#161b22',
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    backgroundColor: '#081A3A',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.5, shadowRadius: 12, elevation: 20,
   },
-  sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#30363d', alignSelf: 'center', marginTop: 10, marginBottom: 4 },
+  sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.18)', alignSelf: 'center', marginTop: 10, marginBottom: 4 },
 
   // Sheet scroll content
   sheetContent: { padding: 14, paddingBottom: 40 },
@@ -2748,11 +2953,11 @@ const s = StyleSheet.create({
   emptyBody:  { color: '#484f58', fontSize: 13, textAlign: 'center', lineHeight: 20 },
 
   // Summary bar
-  summaryBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#21262d', marginBottom: 12 },
+  summaryBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#13294F', marginBottom: 12 },
   summaryItem:{ alignItems: 'center' },
   summaryVal: { color: '#fff', fontSize: 18, fontWeight: '800' },
   summaryLbl: { color: '#484f58', fontSize: 11, marginTop: 2 },
-  summaryDiv: { width: 1, height: 28, backgroundColor: '#21262d' },
+  summaryDiv: { width: 1, height: 28, backgroundColor: '#13294F' },
   liveDot:    { width: 7, height: 7, borderRadius: 4 },
   liveTxt:    { fontSize: 12, fontWeight: '700' },
 
@@ -2761,7 +2966,7 @@ const s = StyleSheet.create({
 
   // ETA options
   etaOptionsRow:  { flexDirection: 'row', gap: 8, marginVertical: 8 },
-  etaOption:      { flex: 1, backgroundColor: '#0d1117', borderRadius: 10, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: '#21262d', gap: 2 },
+  etaOption:      { flex: 1, backgroundColor: '#05122E', borderRadius: 10, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: '#13294F', gap: 2 },
   etaOptionSel:   { borderColor: '#f0a500', backgroundColor: '#1a1400' },
   etaOptionIcon:  { fontSize: 20 },
   etaOptionTime:  { color: '#c9d1d9', fontSize: 16, fontWeight: '800' },
@@ -2780,7 +2985,7 @@ const s = StyleSheet.create({
 
   // Bus card (foto + operador)
   busCard:        { flexDirection: 'row', gap: 10, marginVertical: 8, alignItems: 'center' },
-  busPhoto:       { width: 100, height: 66, borderRadius: 8, backgroundColor: '#21262d' },
+  busPhoto:       { width: 100, height: 66, borderRadius: 8, backgroundColor: '#13294F' },
   busCardInfo:    { flex: 1, gap: 5 },
   busTypeBadge:   { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 5, borderWidth: 1 },
   busTypeTxt:     { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
@@ -2792,13 +2997,13 @@ const s = StyleSheet.create({
   stationName:{ color: '#fff', fontSize: 13, fontWeight: '700', flex: 1 },
 
   // Arrivals
-  arrivalsBox:           { backgroundColor: '#0d1117', borderRadius: 10, padding: 10, marginVertical: 6, borderWidth: 1, borderColor: '#21262d' },
+  arrivalsBox:           { backgroundColor: '#05122E', borderRadius: 10, padding: 10, marginVertical: 6, borderWidth: 1, borderColor: '#13294F' },
   arrivalsTitle:         { color: '#484f58', fontSize: 11, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   noArrivals:            { color: '#484f58', fontSize: 12, textAlign: 'center', paddingVertical: 4 },
   arrivalGroupLabelGreen:{ color: '#3fb950', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 4 },
   showMoreBtn:           { paddingVertical: 6 },
   showMoreTxt:           { color: '#484f58', fontSize: 11 },
-  verMasBtn:  { marginTop: 6, paddingVertical: 5, paddingHorizontal: 10, alignSelf: 'flex-start', backgroundColor: '#21262d', borderRadius: 6 },
+  verMasBtn:  { marginTop: 6, paddingVertical: 5, paddingHorizontal: 10, alignSelf: 'flex-start', backgroundColor: '#13294F', borderRadius: 6 },
   verMasTxt:  { color: '#58a6ff', fontSize: 12, fontWeight: '600' },
   arrivalRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   catchBadge:  { width: 30, height: 30, borderRadius: 15, borderWidth: 1, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
@@ -2861,16 +3066,20 @@ function YatuScreen({ onBack, user }) {
       <StatusBar style="light" />
       {/* Header */}
       <View style={yt.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <TouchableOpacity style={yt.backBtn} onPress={onBack} activeOpacity={0.8}>
           <Ionicons name="chevron-back" size={22} color="#fff" />
         </TouchableOpacity>
-        <View style={yt.headerIcon}>
+        <Breathe style={yt.headerIcon} min={1} max={1.08} duration={2000}>
           <Ionicons name="sparkles" size={23} color="#fff" />
-        </View>
+        </Breathe>
         <View style={{ flex: 1 }}>
           <Text style={yt.headerTitle}>Yatu</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-            <View style={yt.onlineDot} />
+            <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
+              <PulseRing size={7} color="#34D399" />
+              <View style={yt.onlineDot} />
+            </View>
             <Text style={yt.headerSub}>Asistente de viajes · IA</Text>
           </View>
         </View>
@@ -2887,7 +3096,8 @@ function YatuScreen({ onBack, user }) {
         {messages.map(m => {
           const isYatu = m.role === 'assistant';
           return (
-            <View key={m.id} style={[yt.msgRow, !isYatu && yt.msgRowUser]}>
+            <Reveal key={m.id} duration={280} distance={14} from={isYatu ? 'left' : 'right'}
+              style={[yt.msgRow, !isYatu && yt.msgRowUser]}>
               {isYatu && (
                 <View style={yt.yatuAvatar}>
                   <Ionicons name="sparkles" size={16} color="#fff" />
@@ -2896,7 +3106,7 @@ function YatuScreen({ onBack, user }) {
               <View style={[yt.bubble, isYatu ? yt.bubbleYatu : yt.bubbleUser]}>
                 <Text style={isYatu ? yt.bubbleTextYatu : yt.bubbleTextUser}>{m.text}</Text>
               </View>
-            </View>
+            </Reveal>
           );
         })}
         {typing && (
@@ -2905,7 +3115,7 @@ function YatuScreen({ onBack, user }) {
               <Ionicons name="sparkles" size={16} color="#fff" />
             </View>
             <View style={[yt.bubble, yt.bubbleYatu, yt.typingBubble]}>
-              <Text style={yt.typingDots}>• • •</Text>
+              <TypingDots color={C.textFaint} size={7} />
             </View>
           </View>
         )}
@@ -3006,7 +3216,7 @@ const wl = StyleSheet.create({
   btnSecondary:   { flex: 1, height: 52, borderRadius: 14, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(255,255,255,0.06)', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   btnSecondaryTxt:{ color: '#fff', fontSize: 15, fontWeight: '800' },
   // Lista movimientos
-  body:           { padding: 18, paddingBottom: 32 },
+  body:           { padding: 18, paddingBottom: 120 },
   movTitle:       { fontSize: 13, fontWeight: '800', color: '#0E2147', marginBottom: 13 },
   movRow:         { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
   movBorder:      { borderBottomWidth: 1, borderBottomColor: '#EAEEF4' },
@@ -3033,6 +3243,8 @@ const wl = StyleSheet.create({
 });
 
 const fabSt = StyleSheet.create({
-  fab:    { position: 'absolute', right: 15, bottom: 98, zIndex: 40, height: 50, paddingLeft: 13, paddingRight: 17, borderRadius: 25, backgroundColor: '#2468B8', flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#2468B8', shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.7, shadowRadius: 20, elevation: 12 },
-  fabTxt: { fontSize: 15, fontWeight: '800', color: '#fff' },
+  fab:      { position: 'absolute', right: 15, bottom: 112, zIndex: 40, borderRadius: 25, backgroundColor: '#1B4E97', shadowColor: '#1B4E97', shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.7, shadowRadius: 20, elevation: 12 },
+  fabInner: { height: 50, paddingLeft: 13, paddingRight: 17, borderRadius: 25, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  fabGrad:  { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
+  fabTxt:   { fontSize: 15, fontWeight: '800', color: '#fff' },
 });
