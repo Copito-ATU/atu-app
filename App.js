@@ -665,6 +665,8 @@ function MainApp({ user }) {
         ? <BilleteraScreen user={user} onSignOut={() => signOut(auth)} />
         : tab === 'noticias'
           ? <NoticiasScreen campanas={campanas} noticias={noticias} noticiasLoaded={noticiasLoaded} />
+          : tab === 'paraderos'
+            ? <ParaderosScreen userLat={userLat} userLng={userLng} onGoYatu={() => setScreen('yatu')} />
           : tab === 'alertas'
             ? <AlertasScreen incidents={incidents} connected={connected} userLat={userLat} userLng={userLng} />
             : <HomeScreen
@@ -685,13 +687,14 @@ function MainApp({ user }) {
                 onSetCustomOrigin={setCustomOrigin}
                 onGoYatu={() => setScreen('yatu')}
                 onGoNoticias={() => setTab('noticias')}
+                onGoParaderos={() => setTab('paraderos')}
               />
       }
       </ScreenTransition>
       <BottomNav tab={tab} setTab={setTab} />
 
-      {/* FAB Yatu — visible en Noticias, Alertas y Billetera */}
-      {(tab === 'noticias' || tab === 'alertas' || tab === 'billetera') && (
+      {/* FAB Yatu — visible fuera del Inicio */}
+      {(tab === 'noticias' || tab === 'alertas' || tab === 'billetera' || tab === 'paraderos') && (
         <YatuFab key={tab} onPress={() => setScreen('yatu')} />
       )}
 
@@ -706,6 +709,21 @@ function MainApp({ user }) {
 }
 
 // ── Home Screen ───────────────────────────────────────────────────────────────
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Buenos días';
+  if (h < 19) return 'Buenas tardes';
+  return 'Buenas noches';
+}
+
+// Próximas salidas cerca (Home) — datos de demostración
+const NEXT_DEPARTURES = [
+  { system: 'METROPOLITANO', sysColor: '#13315E', stop: 'Est. Ricardo Palma', fare: 'S/ 3.20',
+    sub: 'A 180 m · 3 min caminando', min: '4 min', minColor: '#1E9E6A', time: '08:22', warn: false },
+  { system: 'CORR. ROJO', sysColor: '#C8102E', stop: 'Paradero Pardo', fare: 'S/ 2.00',
+    sub: 'Retraso · +15 min', min: '11 min', minColor: '#0E2147', time: '08:29', warn: true },
+];
+
 function getPeakLevel(peakHours) {
   if (!peakHours) return null;
   const h    = new Date().getHours();
@@ -722,8 +740,9 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
                       buses, connected, recents, onSelectRecent, campanas, noticias, noticiasLoaded,
                       peakHours, user, userLat, userLng,
                       customOrigin, onSetCustomOrigin,
-                      onGoYatu, onGoNoticias }) {
+                      onGoYatu, onGoNoticias, onGoParaderos }) {
   const peak = getPeakLevel(peakHours);
+  const firstName = user?.displayName?.split(' ')[0] || 'Pasajero';
   const [searchModalOpen, setSearchModalOpen] = React.useState(false);
   // Lugares guardados
   const [savedPlaces, setSavedPlaces] = React.useState({ casa: null, trabajo: null, universidad: null });
@@ -772,22 +791,18 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
       <StatusBar style="light" />
 
       {/* ── HEADER UNIFICADO: logo · location · search · yatu ── */}
-      <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hs.header}>
-        {/* Fila superior: ubicación + peak + avatar */}
+      <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={hs.header}>
+        {/* Fila superior: saludo + ubicación + peak + avatar */}
         <View style={hs.headerTop}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-            <View style={hs.logoBox}>
-              <Text style={hs.logoA}>A</Text>
-              <View style={hs.logoStripe} />
-              <Text style={hs.logoTU}>TU</Text>
-            </View>
-            <View style={hs.locChip}>
-              <Ionicons name="location-sharp" size={12} color={ATU_CYAN} />
-              <Text style={hs.locationTxt} numberOfLines={1}>{gpsReady ? 'Lima, Perú' : 'Ubicando...'}</Text>
-              <Ionicons name="chevron-down" size={11} color="rgba(255,255,255,0.45)" />
-            </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={hs.greetHi}>{getGreeting()}, {firstName}</Text>
+            <TouchableOpacity style={hs.greetLocRow} activeOpacity={0.7}>
+              <Ionicons name="location-sharp" size={15} color={ATU_CYAN} />
+              <Text style={hs.greetLoc} numberOfLines={1}>{gpsReady ? 'Miraflores, Lima' : 'Ubicando...'}</Text>
+              <Ionicons name="chevron-down" size={13} color="rgba(255,255,255,0.5)" />
+            </TouchableOpacity>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {peak && <View style={hs.peakPill}><Ionicons name="ellipse" size={7} color={peak.color} /><Text style={hs.peakTxt}>{peak.label}</Text></View>}
             <View style={hs.avatarCircle}>
               <Text style={hs.avatarTxt}>{(user?.displayName?.[0] || user?.email?.[0] || 'U').toUpperCase()}</Text>
@@ -851,6 +866,54 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
       )}
 
       <ScrollView style={hs.scroll} contentContainerStyle={hs.content} keyboardShouldPersistTaps="handled">
+
+        {/* Accesos guardados: Casa · Trabajo · Universidad */}
+        <Reveal delay={300} style={hs.savedRow}>
+          {[
+            { key: 'casa',        label: 'Casa',        icon: 'home' },
+            { key: 'trabajo',     label: 'Trabajo',     icon: 'briefcase' },
+            { key: 'universidad', label: 'Universidad', icon: 'school' },
+          ].map(({ key, label, icon }) => {
+            const saved = !!savedPlaces[key];
+            return (
+              <TouchableOpacity key={key} style={hs.savedCard} activeOpacity={0.85}
+                onPress={() => { setSavedFilter(key); setSearchModalOpen(true); }}>
+                <View style={hs.savedIconBox}>
+                  <Ionicons name={`${icon}-outline`} size={19} color={C.blueBright} />
+                </View>
+                <Text style={hs.savedLabel}>{label}</Text>
+                {saved && <View style={hs.savedDot} />}
+              </TouchableOpacity>
+            );
+          })}
+        </Reveal>
+
+        {/* Próximas salidas cerca */}
+        <Reveal delay={380} style={hs.section}>
+          <View style={hs.sectionRow}>
+            <Text style={hs.sectionTitle}>Próximas salidas cerca</Text>
+            <TouchableOpacity onPress={onGoParaderos} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={hs.sectionMore}>Ver todas ›</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ gap: 9 }}>
+            {NEXT_DEPARTURES.map((d, i) => (
+              <TouchableOpacity key={i} style={[hs.depCard, d.warn && hs.depCardWarn]} activeOpacity={0.85} onPress={onGoParaderos}>
+                <View style={[hs.depBadge, { backgroundColor: d.sysColor }]}>
+                  <Text style={hs.depBadgeTxt} numberOfLines={1}>{d.system}</Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={hs.depName} numberOfLines={1}>{d.stop} · <Text style={hs.depFare}>{d.fare}</Text></Text>
+                  <Text style={[hs.depSub, d.warn && { color: C.amber, fontWeight: '700' }]} numberOfLines={1}>{d.sub}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[hs.depMin, { color: d.minColor }]}>{d.min}</Text>
+                  <Text style={hs.depTime}>{d.time}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Reveal>
 
         {/* Recientes */}
         {recents.length > 0 && (
@@ -1295,7 +1358,7 @@ function RoutePickerScreen({ alternatives, destination, planning, onBack, onSele
     <View style={pick.root}>
       <StatusBar style="light" />
       <View style={pick.header}>
-        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <TouchableOpacity onPress={onBack} style={pick.backBtn} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
@@ -1426,7 +1489,7 @@ function NoticiasScreen({ campanas, noticias, noticiasLoaded }) {
       <StatusBar style="light" />
       {/* Header */}
       <View style={ns.header}>
-        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <Text style={ns.headerTitle}>Noticias</Text>
         <Text style={ns.headerSub}>Campañas y actualizaciones ATU</Text>
         {/* Tabs */}
@@ -1492,7 +1555,7 @@ const ns = StyleSheet.create({
 // ── Bottom Nav ────────────────────────────────────────────────────────────────
 const NAV_TABS = [
   { key: 'home',      iconOn: 'home',          iconOff: 'home-outline',          label: 'Inicio'    },
-  { key: 'noticias',  iconOn: 'newspaper',     iconOff: 'newspaper-outline',     label: 'Noticias'  },
+  { key: 'paraderos', iconOn: 'bus',           iconOff: 'bus-outline',           label: 'Paraderos' },
   { key: 'alertas',   iconOn: 'notifications', iconOff: 'notifications-outline', label: 'Alertas'   },
   { key: 'billetera', iconOn: 'wallet',        iconOff: 'wallet-outline',        label: 'Billetera' },
 ];
@@ -1643,9 +1706,9 @@ function MapaScreen({ buses, connected, userLat, userLng, incidents, routesGeo, 
 
 // ── Alertas Screen ─────────────────────────────────────────────────────────────
 const SEVERITY_CFG = {
-  high:   { color: '#B45309', bg: '#FCEFD6', border: '#F4C77A', badgeBg: '#B45309', label: 'GRAVE',    iconColor: '#3A2402' },
-  medium: { color: '#A9690A', bg: '#fff',    border: '#E2E8F1', badgeBg: '#FCEFD6', label: 'MODERADO', iconColor: '#A9690A' },
-  low:    { color: '#1E9E6A', bg: '#fff',    border: '#E2E8F1', badgeBg: '#E5F6EE', label: 'NORMAL',   iconColor: '#1E9E6A' },
+  high:   { color: '#DC2626', rail: '#EF4444', tint: '#FEF2F2', label: 'GRAVE',    icon: 'alert-circle',     level: 3, meter: 'Congestión pesada'   },
+  medium: { color: '#D97706', rail: '#F59E0B', tint: '#FFF7ED', label: 'MODERADO', icon: 'warning',          level: 2, meter: 'Tránsito moderado'   },
+  low:    { color: '#15803D', rail: '#22C55E', tint: '#ECFDF5', label: 'FLUIDO',   icon: 'checkmark-circle', level: 1, meter: 'Tránsito fluido'     },
 };
 
 function AlertasScreen({ incidents, connected, userLat, userLng }) {
@@ -1659,7 +1722,7 @@ function AlertasScreen({ incidents, connected, userLat, userLng }) {
       <StatusBar style="light" />
       {/* Header — solo fila del título (igual que home) */}
       <View style={al.header}>
-        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <View style={al.headerTitleRow}>
           <Text style={al.headerTitle}>Alertas en vivo</Text>
           <View style={al.enRutaBadge}>
@@ -1706,80 +1769,205 @@ function AlertasScreen({ incidents, connected, userLat, userLng }) {
           </View>
         ) : active.map((inc, i) => {
           const cfg = SEVERITY_CFG[inc.severity] || SEVERITY_CFG.low;
-          const isGrave = inc.severity === 'high';
-          const count = confirmed[inc.id ?? i] || 0;
           const nearbyKm = (hasLocation && inc.lat && inc.lng)
             ? haversineKm(userLat, userLng, inc.lat, inc.lng)
             : null;
           const isNearby = nearbyKm !== null && nearbyKm < 2.0;
+          const distLabel = nearbyKm === null ? null
+            : nearbyKm < 1 ? `${Math.round(nearbyKm * 1000)} m` : `${nearbyKm.toFixed(1)} km`;
           return (
-            <Reveal key={inc.id ?? i} delay={Math.min(i, 6) * 80} distance={18} style={[al.card, { borderColor: cfg.border }]}>
-              {/* Cabecera colorida solo en GRAVE */}
-              {isGrave ? (
-                <View style={[al.cardHeader, { backgroundColor: cfg.bg }]}>
-                  <View style={[al.cardIconBox, { backgroundColor: '#F8BC4F' }]}>
-                    <Ionicons name="warning" size={18} color="#3A2402" />
+            <Reveal key={inc.id ?? i} delay={Math.min(i, 6) * 80} distance={18} style={al.card}>
+              {/* Riel de color según severidad */}
+              <View style={[al.rail, { backgroundColor: cfg.rail }]} />
+              <View style={al.cardInner}>
+                {/* Fila superior: icono · severidad · distancia · retraso */}
+                <View style={al.cardTop}>
+                  <View style={[al.iconBox, { backgroundColor: cfg.tint }]}>
+                    <Ionicons name={cfg.icon} size={21} color={cfg.rail} />
                   </View>
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <View style={[al.sevBadge, { backgroundColor: cfg.badgeBg }]}>
-                      <Text style={[al.sevTxt, { color: '#fff' }]}>{cfg.label}</Text>
-                    </View>
-                    <Text style={[al.cardTitle, { color: '#3A2402', marginTop: 5 }]}>{inc.type || 'Tráfico'}{inc.description ? ` — ${inc.description.split('.')[0]}` : ''}</Text>
-                  </View>
-                </View>
-              ) : null}
-              <View style={al.cardBody}>
-                {!isGrave && (
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-                    <View style={[al.cardIconBox, { backgroundColor: cfg.bg }]}>
-                      <Ionicons name={inc.severity === 'low' ? 'checkmark' : 'warning-outline'} size={17} color={cfg.iconColor} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <View style={[al.sevBadge, { backgroundColor: cfg.badgeBg }]}>
-                        <Text style={[al.sevTxt, { color: cfg.color }]}>{cfg.label}</Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <View style={al.topMeta}>
+                      <View style={[al.sevChip, { backgroundColor: cfg.tint }]}>
+                        <Text style={[al.sevChipTxt, { color: cfg.color }]}>{cfg.label}</Text>
                       </View>
-                      <Text style={[al.cardTitle, { color: '#0E2147', marginTop: 5 }]}>{inc.type || 'Estado'}</Text>
-                      {!!inc.description && (
-                        <Text style={al.cardDesc} numberOfLines={2}>{inc.description}</Text>
+                      {isNearby && (
+                        <View style={al.nearChip}>
+                          <Ionicons name="navigate" size={9} color={C.blueBright} />
+                          <Text style={al.nearChipTxt}>En tu zona</Text>
+                        </View>
                       )}
                     </View>
+                    <Text style={al.cardTitle} numberOfLines={2}>{inc.type || 'Incidencia de tránsito'}</Text>
+                  </View>
+                  {!!inc.delay && (
+                    <View style={[al.delayPill, { backgroundColor: cfg.tint }]}>
+                      <Ionicons name="time" size={11} color={cfg.color} />
+                      <Text style={[al.delayTxt, { color: cfg.color }]}>+{inc.delay}'</Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Medidor de congestión vehicular */}
+                <View style={al.meterRow}>
+                  <View style={al.meterBars}>
+                    {[1, 2, 3].map(n => (
+                      <View key={n} style={[al.meterSeg, { backgroundColor: n <= cfg.level ? cfg.rail : C.hair }]} />
+                    ))}
+                  </View>
+                  <Text style={[al.meterTxt, { color: cfg.color }]}>{cfg.meter}</Text>
+                  {distLabel && <Text style={al.meterDist}>· a {distLabel}</Text>}
+                </View>
+
+                {/* Descripción */}
+                {!!inc.description && (
+                  <Text style={al.cardDesc} numberOfLines={3}>{inc.description}</Text>
+                )}
+
+                {/* Rutas afectadas */}
+                {inc.affectedRoutes?.length > 0 && (
+                  <View style={al.routesWrap}>
+                    <Text style={al.routesLabel}>Afecta a</Text>
+                    {inc.affectedRoutes.map((r, ri) => (
+                      <View key={ri} style={al.routeChip}><Text style={al.routeChipTxt}>{r}</Text></View>
+                    ))}
                   </View>
                 )}
-                {isGrave && (
-                  <>
-                    {inc.affectedRoutes?.length > 0 && (
-                      <View style={al.impactRow}>
-                        {inc.affectedRoutes.map((r, ri) => (
-                          <View key={ri} style={al.routeBadge}><Text style={al.routeBadgeTxt}>{r}</Text></View>
-                        ))}
-                        {!!inc.delay && <Text style={al.impactTime}>Impacto: +{inc.delay} min</Text>}
-                      </View>
-                    )}
-                    {!!inc.description && (
-                      <View style={al.recoBox}>
-                        <Ionicons name="information-circle-outline" size={16} color="#1668AD" />
-                        <Text style={al.recoTxt}>{inc.description}</Text>
-                      </View>
-                    )}
-                    {isNearby && (
-                      <TouchableOpacity
-                        style={al.confirmBtn}
-                        activeOpacity={0.85}
-                        onPress={() => setConfirmed(prev => ({ ...prev, [inc.id ?? i]: (prev[inc.id ?? i] || 23) + 1 }))}>
-                        <Text style={al.confirmBtnTxt}>Confirmar que sigue aquí</Text>
-                      </TouchableOpacity>
-                    )}
-                    <Text style={al.confirmCount}>
-                      {(confirmed[inc.id ?? i] || 23)} personas confirmaron · hace 4 min
-                      {nearbyKm !== null && !isNearby ? `  ·  ${nearbyKm.toFixed(1)} km de ti` : ''}
-                    </Text>
-                  </>
+
+                {/* Confirmar (solo si está cerca) */}
+                {isNearby && (
+                  <TouchableOpacity
+                    style={al.confirmBtn}
+                    activeOpacity={0.85}
+                    onPress={() => setConfirmed(prev => ({ ...prev, [inc.id ?? i]: (prev[inc.id ?? i] || 23) + 1 }))}>
+                    <Ionicons name="hand-left-outline" size={15} color={C.blueBright} />
+                    <Text style={al.confirmBtnTxt}>Confirmar que sigue aquí</Text>
+                  </TouchableOpacity>
                 )}
+
+                {/* Pie: confirmaciones */}
+                <View style={al.footRow}>
+                  <Ionicons name="people" size={12} color={C.textFaint} />
+                  <Text style={al.confirmCount}>
+                    {(confirmed[inc.id ?? i] || 23)} personas confirmaron · hace 4 min
+                  </Text>
+                </View>
               </View>
             </Reveal>
           );
         })}
         <View style={{ height: 24 }} />
+      </ScrollView>
+    </View>
+  );
+}
+
+// ── Paraderos cercanos (live arrivals board) ───────────────────────────────────
+const SYSTEM_CFG = {
+  'METROPOLITANO':  { grad: ['#1E5BAE', '#0E2147'], tint: '#EAF1FB', color: '#1668AD' },
+  'CORREDOR ROJO':  { grad: ['#E0556B', '#A50E26'], tint: '#FDECEF', color: '#C8102E' },
+  'CORREDOR AZUL':  { grad: ['#22BEF5', '#0A66D2'], tint: '#E7F3FC', color: '#0A66D2' },
+  'LÍNEA 1 · TREN': { grad: ['#27B57E', '#15795A'], tint: '#E8F8F0', color: '#15795A' },
+};
+const sysCfg = name => SYSTEM_CFG[name] || SYSTEM_CFG['METROPOLITANO'];
+
+const NEARBY_STOPS = [
+  { name: 'Est. Ricardo Palma', system: 'METROPOLITANO', dist: '180 m', walk: '3 min', accessible: true,
+    services: [
+      { code: 'C', desc: 'Expreso → Sur · Angamos', time: 'Llegando', soon: true },
+      { code: 'B', desc: 'Regular → Sur',            time: '7 min' },
+      { code: 'A', desc: 'Regular → Norte',          time: '12 min' },
+    ] },
+  { name: 'Paradero Av. Pardo', system: 'CORREDOR ROJO', dist: '240 m', walk: '4 min', accessible: true,
+    services: [
+      { code: '301', desc: '→ Centro de Lima',        time: '6 min' },
+      { code: '305', desc: '→ San Isidro · retraso',  time: '+15 min', delay: true },
+    ] },
+  { name: 'Est. Gamarra', system: 'LÍNEA 1 · TREN', dist: '650 m', walk: '9 min', accessible: true,
+    services: [
+      { code: 'L1', desc: '→ Villa El Salvador', time: '6 min' },
+    ] },
+  { name: 'Est. Benavides', system: 'METROPOLITANO', dist: '720 m', walk: '10 min', accessible: false,
+    services: [
+      { code: 'C',  desc: 'Expreso → Sur',           time: '9 min' },
+      { code: 'IM', desc: 'Interruta → Matellini',   time: '14 min' },
+    ] },
+];
+
+function ParaderosScreen({ userLat, userLng, onGoYatu }) {
+  return (
+    <View style={ps.root}>
+      <StatusBar style="light" />
+      {/* Header */}
+      <View style={ps.header}>
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <View style={ps.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={ps.headerTitle}>Paraderos cercanos</Text>
+            <Text style={ps.headerSub}>{userLat ? 'Miraflores, Lima' : 'Ubicando...'} · llegadas en vivo</Text>
+          </View>
+          <View style={ps.liveBadge}>
+            <View style={{ width: 7, height: 7, alignItems: 'center', justifyContent: 'center' }}>
+              <PulseRing size={7} color="#34D399" />
+              <View style={ps.liveDot} />
+            </View>
+            <Text style={ps.liveTxt}>En vivo</Text>
+          </View>
+        </View>
+      </View>
+
+      <ScrollView contentContainerStyle={ps.list} showsVerticalScrollIndicator={false}>
+        {NEARBY_STOPS.map((st, i) => {
+          const cfg = sysCfg(st.system);
+          return (
+            <Reveal key={i} delay={i * 90} distance={20} style={ps.card}>
+              {/* Encabezado del paradero */}
+              <View style={ps.stopTop}>
+                <View style={[ps.sysIcon, { backgroundColor: cfg.color }]}>
+                  <Ionicons name={st.system.startsWith('LÍNEA') ? 'train' : 'bus'} size={17} color="#fff" />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={ps.stopName} numberOfLines={1}>{st.name}</Text>
+                  <View style={ps.stopMeta}>
+                    <View style={[ps.sysChip, { backgroundColor: cfg.tint }]}>
+                      <Text style={[ps.sysChipTxt, { color: cfg.color }]}>{st.system}</Text>
+                    </View>
+                    <Text style={ps.stopDist} numberOfLines={1}>· {st.dist} · {st.walk} a pie</Text>
+                  </View>
+                </View>
+                {st.accessible && (
+                  <View style={ps.accBox}><Ionicons name="accessibility" size={15} color={C.green} /></View>
+                )}
+              </View>
+
+              {/* Servicios que pasan por el paradero */}
+              <View style={ps.svcWrap}>
+                {st.services.map((sv, si) => (
+                  <View key={si} style={[ps.svcRow, si < st.services.length - 1 && ps.svcBorder]}>
+                    <LinearGradient colors={cfg.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={ps.codeBadge}>
+                      <Text style={ps.codeTxt}>{sv.code}</Text>
+                    </LinearGradient>
+                    <Text style={ps.svcDesc} numberOfLines={1}>{sv.desc}</Text>
+                    <View style={ps.svcTimeWrap}>
+                      {sv.soon && (
+                        <View style={{ width: 7, height: 7, marginRight: 5, alignItems: 'center', justifyContent: 'center' }}>
+                          <PulseRing size={7} color={C.green} />
+                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: C.green }} />
+                        </View>
+                      )}
+                      <Text style={[ps.svcTime, sv.soon && { color: '#1A8F62' }, sv.delay && { color: C.amber }]}>{sv.time}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+
+              <TouchableOpacity style={[ps.detailBtn, { backgroundColor: cfg.tint }]} activeOpacity={0.85}>
+                <Text style={[ps.detailTxt, { color: cfg.color }]}>Ver paradero</Text>
+                <Ionicons name="chevron-forward" size={14} color={cfg.color} />
+              </TouchableOpacity>
+            </Reveal>
+          );
+        })}
+        <View style={{ height: 120 }} />
       </ScrollView>
     </View>
   );
@@ -1902,7 +2090,7 @@ function BilleteraScreen({ user, onSignOut }) {
     <View style={wl.root}>
       <StatusBar style="light" />
       <View style={wl.header}>
-        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <View style={wl.headerRow}>
           <Text style={wl.headerTitle}>Billetera</Text>
           <TouchableOpacity
@@ -2056,7 +2244,7 @@ function TarjetaScreen({ onBack }) {
     <View style={ta.root}>
       <StatusBar style="light" />
       <View style={ta.header}>
-        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <TouchableOpacity onPress={onBack} style={ta.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Ionicons name="chevron-back" size={24} color="#fff" />
         </TouchableOpacity>
@@ -2630,34 +2818,77 @@ const al = StyleSheet.create({
   emptyBox:       { alignItems: 'center', paddingTop: 80, gap: 12 },
   emptyTitle:     { fontSize: 20, fontWeight: '800', color: '#111' },
   emptySub:       { fontSize: 14, color: '#6b7280', textAlign: 'center', lineHeight: 20 },
-  sevBadge:       { borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 },
-  sevTxt:         { color: '#fff', fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
-  cardTitle:      { fontSize: 15, fontWeight: '800', flex: 1 },
-  cardDesc:       { fontSize: 13, color: '#374151', lineHeight: 19 },
+  cardTitle:      { fontSize: 15, fontWeight: '800', color: C.text, lineHeight: 20 },
+  cardDesc:       { fontSize: 13, color: C.textMut, lineHeight: 19, marginTop: 10 },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  enRutaBadge:    { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  enRutaDot:      { width: 7, height: 7, borderRadius: 4, backgroundColor: '#5BBDF5' },
-  enRutaTxt:      { color: '#5BBDF5', fontSize: 11, fontWeight: '700' },
+  enRutaBadge:    { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  enRutaDot:      { width: 7, height: 7, borderRadius: 4, backgroundColor: C.cyan },
+  enRutaTxt:      { color: C.cyan, fontSize: 11, fontWeight: '700' },
   mapOuter:           { height: 200, marginTop: 10, overflow: 'hidden', borderRadius: 12 },
   mapPlaceholder:     { flex: 1, backgroundColor: '#1a3a6e', alignItems: 'center', justifyContent: 'center', gap: 8 },
   mapPlaceholderTxt:  { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
-  card:           { backgroundColor: '#fff', borderWidth: 1.5, borderRadius: 18, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 8, elevation: 2 },
-  cardHeader:     { padding: 13, flexDirection: 'row', alignItems: 'flex-start' },
-  cardBody:       { padding: 14 },
-  cardIconBox:    { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  impactRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' },
-  routeBadge:     { backgroundColor: '#C8102E', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  routeBadgeTxt:  { color: '#fff', fontSize: 10, fontWeight: '800' },
-  impactTime:     { color: '#0E2147', fontSize: 13, fontWeight: '800' },
-  recoBox:        { backgroundColor: '#F4F6FA', borderRadius: 12, padding: 12, flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginBottom: 12 },
-  recoTxt:        { flex: 1, fontSize: 12.5, fontWeight: '600', color: '#3F4A5E', lineHeight: 18 },
-  confirmBtn:     { borderWidth: 1.5, borderColor: '#0E2147', borderRadius: 13, height: 46, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  confirmBtnTxt:  { color: '#0E2147', fontSize: 14, fontWeight: '800' },
-  confirmCount:   { fontSize: 11, fontWeight: '600', color: '#9AA3B4', textAlign: 'center' },
-  routesRow:      { flexDirection: 'row', alignItems: 'center', paddingLeft: 4 },
-  routesTxt:      { fontSize: 12, fontWeight: '600' },
-  delayRow:       { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
-  delayTxt:       { fontSize: 12, fontWeight: '700' },
+
+  // ── Tarjeta de incidencia (congestión vehicular) ──
+  card:           { backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', flexDirection: 'row', ...SHADOW.card },
+  rail:           { width: 5 },
+  cardInner:      { flex: 1, padding: 15 },
+  cardTop:        { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  iconBox:        { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  topMeta:        { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  sevChip:        { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  sevChipTxt:     { fontSize: 9.5, fontWeight: '900', letterSpacing: 0.7 },
+  nearChip:       { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#EEF4FF', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  nearChipTxt:    { fontSize: 9.5, fontWeight: '800', color: C.blueBright, letterSpacing: 0.3 },
+  delayPill:      { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 0 },
+  delayTxt:       { fontSize: 13, fontWeight: '900' },
+  meterRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 13 },
+  meterBars:      { flexDirection: 'row', gap: 3 },
+  meterSeg:       { width: 18, height: 6, borderRadius: 3 },
+  meterTxt:       { fontSize: 12, fontWeight: '800' },
+  meterDist:      { fontSize: 11.5, fontWeight: '600', color: C.textFaint },
+  routesWrap:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 12 },
+  routesLabel:    { fontSize: 11, fontWeight: '700', color: C.textFaint, marginRight: 2 },
+  routeChip:      { backgroundColor: '#EEF2F9', borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4 },
+  routeChipTxt:   { color: C.text, fontSize: 11, fontWeight: '800' },
+  confirmBtn:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1.5, borderColor: '#D4E0F5', backgroundColor: '#F5F9FF', borderRadius: 13, height: 44, marginTop: 14 },
+  confirmBtnTxt:  { color: C.blueBright, fontSize: 13.5, fontWeight: '800' },
+  footRow:        { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12 },
+  confirmCount:   { fontSize: 11, fontWeight: '600', color: C.textFaint },
+});
+
+// ── Paraderos styles ───────────────────────────────────────────────────────────
+const ps = StyleSheet.create({
+  root:         { flex: 1, backgroundColor: C.bg },
+  header:       { paddingTop: 54, paddingBottom: 16, paddingHorizontal: 18 },
+  headerRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle:  { fontSize: 21, fontWeight: '900', color: '#fff', letterSpacing: -0.4 },
+  headerSub:    { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.6)', marginTop: 3 },
+  liveBadge:    { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 20, paddingHorizontal: 11, paddingVertical: 6 },
+  liveDot:      { width: 6, height: 6, borderRadius: 3, backgroundColor: '#34D399' },
+  liveTxt:      { color: '#fff', fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
+
+  list:         { padding: 16, gap: 14 },
+  card:         { backgroundColor: '#fff', borderRadius: 18, padding: 15, ...SHADOW.card },
+  stopTop:      { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  sysIcon:      { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  stopName:     { fontSize: 15.5, fontWeight: '800', color: C.text },
+  stopMeta:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  sysChip:      { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  sysChipTxt:   { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  stopDist:     { flex: 1, fontSize: 11, fontWeight: '600', color: C.textFaint },
+  accBox:       { width: 30, height: 30, borderRadius: 9, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+
+  svcWrap:      { marginTop: 12, backgroundColor: '#F7F9FD', borderRadius: 13, paddingHorizontal: 12 },
+  svcRow:       { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11 },
+  svcBorder:    { borderBottomWidth: 1, borderBottomColor: '#EAEFF7' },
+  codeBadge:    { minWidth: 38, height: 30, borderRadius: 9, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
+  codeTxt:      { color: '#fff', fontSize: 13, fontWeight: '900', letterSpacing: -0.2 },
+  svcDesc:      { flex: 1, fontSize: 13, fontWeight: '600', color: C.text },
+  svcTimeWrap:  { flexDirection: 'row', alignItems: 'center' },
+  svcTime:      { fontSize: 13, fontWeight: '800', color: C.text },
+
+  detailBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 12, height: 40, marginTop: 12 },
+  detailTxt:    { fontSize: 13, fontWeight: '800' },
 });
 
 // ── Ver Todas styles ──────────────────────────────────────────────────────────
@@ -2728,8 +2959,28 @@ const hs = StyleSheet.create({
   locationTxt:  { color: 'rgba(255,255,255,0.88)', fontSize: 12.5, fontWeight: '700' },
   peakPill:     { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,255,255,0.13)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   peakTxt:      { color: '#fff', fontSize: 10.5, fontWeight: '700' },
-  avatarCircle: { width: 33, height: 33, borderRadius: 17, backgroundColor: ATU_CYAN, alignItems: 'center', justifyContent: 'center' },
-  avatarTxt:    { color: '#fff', fontSize: 14, fontWeight: '900' },
+  avatarCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: ATU_CYAN, alignItems: 'center', justifyContent: 'center' },
+  avatarTxt:    { color: '#fff', fontSize: 16, fontWeight: '900' },
+  // Saludo personalizado
+  greetHi:      { color: '#9FB6D6', fontSize: 13, fontWeight: '600' },
+  greetLocRow:  { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  greetLoc:     { color: '#fff', fontSize: 18, fontWeight: '800', letterSpacing: -0.3, maxWidth: 200 },
+  // Accesos guardados
+  savedRow:     { flexDirection: 'row', gap: 10 },
+  savedCard:    { flex: 1, backgroundColor: '#fff', borderRadius: 16, paddingVertical: 13, alignItems: 'center', gap: 8, ...SHADOW.card },
+  savedIconBox: { width: 40, height: 40, borderRadius: 13, backgroundColor: '#EEF4FF', alignItems: 'center', justifyContent: 'center' },
+  savedLabel:   { fontSize: 12.5, fontWeight: '700', color: C.text },
+  savedDot:     { position: 'absolute', top: 10, right: 12, width: 7, height: 7, borderRadius: 4, backgroundColor: C.green },
+  // Próximas salidas
+  depCard:      { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 15, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1.5, borderColor: C.hair },
+  depCardWarn:  { borderColor: '#F4D9A6' },
+  depBadge:     { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8, maxWidth: 84 },
+  depBadgeTxt:  { color: '#fff', fontSize: 9, fontWeight: '900', letterSpacing: 0.3 },
+  depName:      { fontSize: 13, fontWeight: '700', color: C.text },
+  depFare:      { color: '#1A8F62', fontWeight: '800' },
+  depSub:       { fontSize: 11, fontWeight: '600', color: C.textMut, marginTop: 2 },
+  depMin:       { fontSize: 16, fontWeight: '900', letterSpacing: -0.3 },
+  depTime:      { fontSize: 10.5, fontWeight: '600', color: C.textFaint, marginTop: 1 },
   // Search bar dentro del header
   searchBar:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 0, height: 52, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.22, shadowRadius: 10, elevation: 5 },
   searchInput:  { flex: 1, color: '#0E2147', fontSize: 15.5, fontWeight: '600', paddingVertical: 0, marginLeft: 10, marginRight: 6 },
@@ -2747,7 +2998,7 @@ const hs = StyleSheet.create({
   yatuBold:        { fontSize: 12.5, fontWeight: '800', color: '#fff' },
 
   // ── Mapa grande ──────────────────────────────────────────────────────────
-  mapBig:          { height: 300, marginHorizontal: 14, marginTop: 12, borderRadius: 26, overflow: 'hidden', position: 'relative', shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 16, elevation: 6 },
+  mapBig:          { height: 200, marginHorizontal: 14, marginTop: 12, borderRadius: 22, overflow: 'hidden', position: 'relative', shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 16, elevation: 6 },
   mapLoading:      { flex: 1, backgroundColor: '#E9EDE3', justifyContent: 'center', alignItems: 'center', gap: 8 },
   mapLoadingTxt:   { color: '#6b7280', fontSize: 12, fontWeight: '600' },
   mapAlertBar:     { position: 'absolute', top: 10, left: 10, right: 10, backgroundColor: '#fff', borderRadius: 13, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#0E2147', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.14, shadowRadius: 8, elevation: 4 },
@@ -3068,7 +3319,7 @@ function YatuScreen({ onBack, user }) {
       <StatusBar style="light" />
       {/* Header */}
       <View style={yt.header}>
-        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        <LinearGradient colors={HEADER_GRAD} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <TouchableOpacity style={yt.backBtn} onPress={onBack} activeOpacity={0.8}>
           <Ionicons name="chevron-back" size={22} color="#fff" />
         </TouchableOpacity>
