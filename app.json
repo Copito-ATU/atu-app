@@ -1,15 +1,18 @@
 {
   "expo": {
-    "name": "atu_rn",
+    "name": "ATU Lima",
     "slug": "atu_rn",
     "version": "1.0.0",
+    "scheme": "atu-rn",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.solera.atulima"
     },
     "android": {
+      "package": "com.solera.atulima",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -19,6 +22,9 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-web-browser"
+    ]
   }
 }
