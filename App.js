@@ -136,8 +136,8 @@ function SplashScreen() {
       Animated.timing(stripe, { toValue: 1, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start();
   }, []);
-  const logoScale = logo.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] });
-  const stripeW   = stripe.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+  const logoScale  = logo.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] });
+  const stripeSlide = stripe.interpolate({ inputRange: [0, 1], outputRange: [-300, 0] });
 
   return (
     <View style={{ flex: 1, backgroundColor: C.navy900, justifyContent: 'center', alignItems: 'center' }}>
@@ -146,7 +146,9 @@ function SplashScreen() {
       <Animated.View style={{ opacity: logo, transform: [{ scale: logoScale }], alignItems: 'center' }}>
         <View style={{ position: 'relative', flexDirection: 'row', alignItems: 'center' }}>
           <Text style={{ color: '#fff', fontSize: 76, fontWeight: '900', letterSpacing: -5 }}>ATU</Text>
-          <Animated.View style={{ position: 'absolute', left: 0, width: stripeW, height: 11, backgroundColor: C.cyan, top: 47, borderRadius: 3 }} />
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 47, height: 11, overflow: 'hidden', borderRadius: 3 }}>
+            <Animated.View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: C.cyan, transform: [{ translateX: stripeSlide }] }} />
+          </View>
         </View>
         <Text style={{ color: 'rgba(255,255,255,0.62)', fontSize: 17, fontWeight: '700', letterSpacing: 5, marginTop: 10 }}>L I M A</Text>
       </Animated.View>

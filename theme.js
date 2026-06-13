@@ -192,7 +192,7 @@ export function Shine({ band = 0.5, color = 'rgba(255,255,255,0.28)', delay = 10
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none"
       onLayout={e => setW(e.nativeEvent.layout.width)}>
-      <Animated.View style={{ position: 'absolute', top: '-60%', bottom: '-60%',
+      <Animated.View style={{ position: 'absolute', top: -200, bottom: -200,
         width: (w || 1) * band, transform: [{ translateX }, { rotate: '18deg' }] }}>
         <LinearGradient colors={['rgba(255,255,255,0)', color, 'rgba(255,255,255,0)']}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ flex: 1 }} />
