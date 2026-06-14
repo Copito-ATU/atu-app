@@ -1160,23 +1160,6 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
         )}
 
 
-        {/* Acceso rápido a Noticias */}
-        {noticiasLoaded && (campanas.length > 0 || noticias.length > 0) && (
-          <Reveal delay={420}>
-            <TouchableOpacity style={hs.noticiasTeaser} activeOpacity={0.88} onPress={onGoNoticias}>
-              <View style={hs.noticiasTeaserLeft}>
-                <View style={hs.teaserIconBox}>
-                  <Ionicons name="newspaper" size={18} color={C.blueBright} />
-                </View>
-                <View>
-                  <Text style={hs.noticiasTeaserTitle}>Campañas y noticias</Text>
-                  <Text style={hs.noticiasTeaserSub}>{(campanas.length + noticias.length)} publicaciones · toca para ver</Text>
-                </View>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color="#C5CDD8" />
-            </TouchableOpacity>
-          </Reveal>
-        )}
 
         <View style={{ height: 16 }} />
       </ScrollView>
