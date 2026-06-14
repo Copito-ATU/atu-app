@@ -486,43 +486,31 @@ function routeBearing(latlngs, busLat, busLng, goForward) {
   return calcBearing(latlngs[idx][0], latlngs[idx][1], latlngs[next][0], latlngs[next][1]);
 }
 
+var BUS_ICO_B64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAADFSURBVFhH7ZRBCsJADEWz0X2XnsK1R5LewDN4F4/kIVwKVWZoIA0/Ezud0YV58KEkPz8plBIFQRAseX1BRbS5lyB7YOwlCB/QCisP1TLWQC1WHqplrIFarDxUy1gDtVh5qJaRH2ELNh3AmojoWSnOOKg9qw5oqeu8Jz1Deh8gBfn5ATtglGZd93SZ506gZ+IZdb8kyaPQW3B0jHqJpbuaGwuZkDMw81t4oEWo5qLfKin9Fz5Bz61eztxEwKCbDpuXB8F/8Ab4YhAKUs3wFAAAAABJRU5ErkJggg==';
+
 function busIcon(color, dir, catchable, bearing) {
   var rot = (bearing !== undefined && bearing !== null)
     ? bearing
     : (DIR_DEG[dir] !== undefined ? DIR_DEG[dir] : 90);
-  var c  = catchable !== false ? '#1e2329' : '#777';
   var op = catchable !== false ? '1' : '0.45';
   var shadow = catchable !== false
-    ? 'drop-shadow(0 3px 8px rgba(0,0,0,0.55)) drop-shadow(0 1px 2px rgba(0,0,0,0.3))'
+    ? 'drop-shadow(0 3px 8px rgba(0,0,0,0.55))'
     : 'drop-shadow(0 1px 3px rgba(0,0,0,0.2))';
-  // Bus SVG naturally faces RIGHT — mirror when going leftward
   var flip = (rot > 180 && rot <= 360) ? 'scaleX(-1)' : 'scaleX(1)';
-
-  // Bus faces RIGHT: windshield on right, rear window on left
-  var svg =
-    '<svg width="34" height="22" viewBox="0 0 44 28" xmlns="http://www.w3.org/2000/svg">' +
-    '<rect x="1" y="2" width="42" height="20" rx="6" fill="' + c + '"/>' +
-    '<rect x="1" y="2" width="42" height="20" rx="6" fill="none"' +
-    '  stroke="rgba(255,255,255,0.15)" stroke-width="1"/>' +
-    '<rect x="3" y="5" width="9" height="14" rx="2" fill="rgba(195,220,240,0.72)"/>' +
-    '<path d="M14,5 L39,5 L40,7 L40,17 Q40,19 38,19 L16,19 Q14,19 14,17 L14,5Z"' +
-    '  fill="rgba(195,220,240,0.82)"/>' +
-    '<rect x="1" y="2" width="42" height="5" rx="6" fill="rgba(255,255,255,0.06)"/>' +
-    '<circle cx="11" cy="25" r="4.2" fill="#111" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>' +
-    '<circle cx="11" cy="25" r="1.8" fill="rgba(255,255,255,0.15)"/>' +
-    '<circle cx="33" cy="25" r="4.2" fill="#111" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>' +
-    '<circle cx="33" cy="25" r="1.8" fill="rgba(255,255,255,0.15)"/>' +
-    (catchable !== false
-      ? '<circle cx="22" cy="12" r="2.8" fill="rgba(0,0,0,0.3)"/>' +
-        '<circle cx="22" cy="12" r="2" fill="#22c55e" stroke="rgba(255,255,255,0.9)" stroke-width="1"/>'
-      : '') +
-    '</svg>';
-
+  var dot = catchable !== false
+    ? '<div style="position:absolute;bottom:2px;left:50%;transform:translateX(-50%);' +
+      'width:10px;height:10px;border-radius:50%;background:#22c55e;' +
+      'border:1.5px solid white;pointer-events:none"></div>'
+    : '';
   return L.divIcon({
     className:  '',
-    iconSize:   [34, 22],
-    iconAnchor: [17, 11],
-    html: '<div style="transform:' + flip + ';filter:' + shadow + ';opacity:' + op + ';display:inline-block">' + svg + '</div>'
+    iconSize:   [38, 38],
+    iconAnchor: [19, 19],
+    html: '<div style="position:relative;display:inline-block;transform:' + flip + ';' +
+          'filter:' + shadow + ';opacity:' + op + '">' +
+          '<img src="data:image/png;base64,' + BUS_ICO_B64 + '" width="38" height="38">' +
+          dot +
+          '</div>'
   });
 }
 
