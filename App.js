@@ -15,7 +15,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import { exchangeCodeAsync, makeRedirectUri } from 'expo-auth-session';
 import { GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged } from 'firebase/auth';
-import { FIREBASE_URL } from './constants';
+import { FIREBASE_URL, SIM_URL } from './constants';
 import { auth, GOOGLE_WEB_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ANDROID_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, ENABLE_GOOGLE_LOGIN, BYPASS_AUTH, EXPO_USERNAME } from './services/firebase';
 import { Platform } from 'react-native';
 import { getTrafficAlerts } from './services/trafficAlerts';
@@ -941,6 +941,25 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
   const [auxSugs, setAuxSugs]   = React.useState([]);
   const [auxLoading, setAuxLoading] = React.useState(false);
 
+  // ── Velocidad simulador ────────────────────────────────────────────────────
+  const [simSpeed, setSimSpeedState] = React.useState(1);
+  async function setSpeed(m) {
+    try {
+      await fetch(`${SIM_URL}/api/sim/speed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ multiplier: m }),
+      });
+      setSimSpeedState(m);
+    } catch (_) {}
+  }
+  React.useEffect(() => {
+    fetch(`${SIM_URL}/api/sim/speed`)
+      .then(r => r.json())
+      .then(d => { if (d.multiplier) setSimSpeedState(d.multiplier); })
+      .catch(() => {});
+  }, []);
+
   // ── Voz ───────────────────────────────────────────────────────────────────
   const [isRecording, setIsRecording]     = React.useState(false);
   const [isTranscribing, setIsTranscribing] = React.useState(false);
@@ -1110,6 +1129,26 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
           </View>
         )}
       </Reveal>
+
+      {/* ── Control velocidad simulador ── */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 7,
+                     backgroundColor: '#0d1117', borderBottomWidth: 1, borderBottomColor: '#1e2533', gap: 8 }}>
+        <Ionicons name="speedometer-outline" size={15} color="#64748b" />
+        <Text style={{ fontSize: 11, color: '#64748b', fontWeight: '600', marginRight: 2 }}>SIM</Text>
+        {[1, 2, 5, 10].map(v => (
+          <TouchableOpacity key={v}
+            style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20,
+                     backgroundColor: simSpeed === v ? '#3b82f6' : '#1e293b',
+                     borderWidth: 1, borderColor: simSpeed === v ? '#3b82f6' : '#334155' }}
+            onPress={() => setSpeed(v)}>
+            <Text style={{ fontSize: 12, fontWeight: '700',
+                           color: simSpeed === v ? '#fff' : '#64748b' }}>{v}×</Text>
+          </TouchableOpacity>
+        ))}
+        <Text style={{ fontSize: 10, color: '#334155', marginLeft: 4 }}>
+          {simSpeed === 1 ? 'real (máx 48 km/h)' : `×${simSpeed} velocidad`}
+        </Text>
+      </View>
 
       {/* planning indicator — sutil, sin bloquear la pantalla */}
       {planning && (
