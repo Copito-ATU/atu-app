@@ -3287,7 +3287,7 @@ const hs = StyleSheet.create({
   yatuBold:        { fontSize: 12.5, fontWeight: '800', color: '#fff' },
 
   // ── Mapa grande ──────────────────────────────────────────────────────────
-  mapBig:          { height: 200, marginHorizontal: 14, marginTop: 12, borderRadius: 22, overflow: 'hidden', position: 'relative', shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 16, elevation: 6 },
+  mapBig:          { height: 260, marginHorizontal: 14, marginTop: 12, borderRadius: 22, overflow: 'hidden', position: 'relative', shadowColor: '#0C1E40', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 16, elevation: 6 },
   mapLoading:      { flex: 1, backgroundColor: '#E9EDE3', justifyContent: 'center', alignItems: 'center', gap: 8 },
   mapLoadingTxt:   { color: '#6b7280', fontSize: 12, fontWeight: '600' },
   mapAlertBar:     { position: 'absolute', top: 10, left: 10, right: 10, backgroundColor: '#fff', borderRadius: 13, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#0E2147', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.14, shadowRadius: 8, elevation: 4 },
