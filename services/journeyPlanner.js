@@ -8,20 +8,24 @@ const MAX_WALK_BRT    = 2.5;   // la gente camina más para tomar BRT/Metro
 const MAX_TRANSFER_KM = 0.6;
 const MAX_TRANSFER_BRT= 1.0;   // transbordos a BRT permiten más caminata
 
-// Velocidades reales por tipo de ruta (km/h)
 const SPEED_BY_TYPE = {
-  brt:        42,
-  metro:      48,
-  diametral:  18,
-  radial:     15,
-  periferica: 12,
-  circular:   16,
+  brt:        38,   // Metropolitano: ~38 km/h promedio real (vía expresa dedicada)
+  metro:      45,   // Línea 1: ~45 km/h (tren, sin semáforos)
+  diametral:  16,
+  radial:     13,
+  periferica: 10,
+  circular:   13,
 };
-// Bonus de tiempo (min) que se aplica al score — hace que BRT/Metro compita
-const SCORE_BONUS = {
-  brt:   6,
-  metro: 5,
+const DWELL_BY_TYPE = {
+  brt:        0.4,  // andén BRT dedicado: ~24 seg por parada
+  metro:      0.35,
+  diametral:  1.5,
+  radial:     1.8,
+  periferica: 2.0,
+  circular:   1.6,
 };
+// Bonus de score: refleja confort, puntualidad y ventaja de vía exclusiva
+const SCORE_BONUS = { brt: 15, metro: 12 };
 
 // ── Utilidades ────────────────────────────────────────────────────────────────
 export function haversineKm(lat1, lng1, lat2, lng2) {
@@ -40,8 +44,9 @@ function estimateRideMin(routeId, fromId, toId) {
   let km = 0;
   for (let i = s; i < e; i++)
     km += haversineKm(st[i].lat, st[i].lng, st[i+1].lat, st[i+1].lng);
-  const spd = SPEED_BY_TYPE[route.type] || BUS_KMH;
-  return (km / spd) * 60 + Math.abs(toId - fromId) * DWELL_PER_STOP;
+  const spd   = SPEED_BY_TYPE[route.type] || BUS_KMH;
+  const dwell = DWELL_BY_TYPE[route.type] || DWELL_PER_STOP;
+  return (km / spd) * 60 + Math.abs(toId - fromId) * dwell;
 }
 
 export function getAllStations() {
@@ -316,8 +321,14 @@ export function planJourney(fromLat, fromLng, toLat, toLng, buses) {
     });
   }
 
-  const TOP_O = origins.slice(0, 6);
-  const TOP_D = dests.slice(0, 6);
+  // BRT/Metro siempre incluidos; completar con buses regulares más cercanos
+  function buildTop(candidates, maxReg) {
+    const brt = candidates.filter(r => r.routeType === 'brt' || r.routeType === 'metro');
+    const reg = candidates.filter(r => r.routeType !== 'brt' && r.routeType !== 'metro').slice(0, maxReg);
+    return [...brt, ...reg];
+  }
+  const TOP_O = buildTop(origins, 6);
+  const TOP_D = buildTop(dests, 6);
 
   // ── Opción A: ruta directa ────────────────────────────────────────────────
   for (const o of TOP_O) {
