@@ -487,63 +487,42 @@ function routeBearing(latlngs, busLat, busLng, goForward) {
 }
 
 function busIcon(color, dir, catchable, bearing) {
-  // Prefer real geometric bearing; fall back to compass string
   var rot = (bearing !== undefined && bearing !== null)
     ? bearing
-    : (DIR_DEG[dir] !== undefined ? DIR_DEG[dir] : 0);
-  var c   = catchable !== false ? color : '#aab0bc';
-  var op  = catchable !== false ? '1' : '0.45';
-
-  // Slightly darken color for roof details
+    : (DIR_DEG[dir] !== undefined ? DIR_DEG[dir] : 90);
+  var c  = catchable !== false ? '#1e2329' : '#777';
+  var op = catchable !== false ? '1' : '0.45';
   var shadow = catchable !== false
-    ? 'drop-shadow(0 2px 5px rgba(0,0,0,0.38)) drop-shadow(0 0 1px rgba(0,0,0,0.25))'
+    ? 'drop-shadow(0 3px 8px rgba(0,0,0,0.55)) drop-shadow(0 1px 2px rgba(0,0,0,0.3))'
     : 'drop-shadow(0 1px 3px rgba(0,0,0,0.2))';
+  // Bus SVG naturally faces RIGHT — mirror when going leftward
+  var flip = (rot > 180 && rot <= 360) ? 'scaleX(-1)' : 'scaleX(1)';
 
-  // Waze/Google-style aerial bus:
-  // bullet/teardrop silhouette — pointed nose (top=front), rounded rear
+  // Bus faces RIGHT: windshield on right, rear window on left
   var svg =
-    '<svg width="18" height="30" viewBox="0 0 20 34" xmlns="http://www.w3.org/2000/svg">' +
-    // Soft ground shadow
-    '<ellipse cx="10" cy="31" rx="7.5" ry="2.5" fill="rgba(0,0,0,0.16)"/>' +
-    // Main body: pointed front, rounded back
-    '<path d="M10 1 L1 10 L1 27 Q1 33 6.5 33 L13.5 33 Q19 33 19 27 L19 10 Z"' +
-    '  fill="' + c + '"/>' +
-    // White halo outline — gives pop on any map tile
-    '<path d="M10 1 L1 10 L1 27 Q1 33 6.5 33 L13.5 33 Q19 33 19 27 L19 10 Z"' +
-    '  fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="2" stroke-linejoin="round"/>' +
-    // Windshield glass (front triangle)
-    '<path d="M10 3.5 L3.5 10.5 L16.5 10.5 Z" fill="rgba(210,238,255,0.55)"/>' +
-    // Roof front highlight strip
-    '<rect x="2" y="10.5" width="16" height="5" rx="0"' +
-    '  fill="rgba(255,255,255,0.12)"/>' +
-    // Roof AC unit 1
-    '<rect x="6.5" y="17" width="7" height="2.5" rx="1.2"' +
-    '  fill="rgba(0,0,0,0.2)"/>' +
-    // Roof AC unit 2
-    '<rect x="6.5" y="22.5" width="7" height="2.5" rx="1.2"' +
-    '  fill="rgba(0,0,0,0.2)"/>' +
-    // Rear bumper line
-    '<rect x="3" y="29.5" width="14" height="1.2" rx="0.6"' +
-    '  fill="rgba(0,0,0,0.18)"/>' +
-    // Tail lights
-    '<rect x="1.5" y="27.5" width="4" height="2.2" rx="1.1"' +
-    '  fill="rgba(255,50,50,0.92)"/>' +
-    '<rect x="14.5" y="27.5" width="4" height="2.2" rx="1.1"' +
-    '  fill="rgba(255,50,50,0.92)"/>' +
-    // Catchable green pulse dot
+    '<svg width="34" height="22" viewBox="0 0 44 28" xmlns="http://www.w3.org/2000/svg">' +
+    '<rect x="1" y="2" width="42" height="20" rx="6" fill="' + c + '"/>' +
+    '<rect x="1" y="2" width="42" height="20" rx="6" fill="none"' +
+    '  stroke="rgba(255,255,255,0.15)" stroke-width="1"/>' +
+    '<rect x="3" y="5" width="9" height="14" rx="2" fill="rgba(195,220,240,0.72)"/>' +
+    '<path d="M14,5 L39,5 L40,7 L40,17 Q40,19 38,19 L16,19 Q14,19 14,17 L14,5Z"' +
+    '  fill="rgba(195,220,240,0.82)"/>' +
+    '<rect x="1" y="2" width="42" height="5" rx="6" fill="rgba(255,255,255,0.06)"/>' +
+    '<circle cx="11" cy="25" r="4.2" fill="#111" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>' +
+    '<circle cx="11" cy="25" r="1.8" fill="rgba(255,255,255,0.15)"/>' +
+    '<circle cx="33" cy="25" r="4.2" fill="#111" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>' +
+    '<circle cx="33" cy="25" r="1.8" fill="rgba(255,255,255,0.15)"/>' +
     (catchable !== false
-      ? '<circle cx="10" cy="23.5" r="3" fill="rgba(0,0,0,0.18)"/>' +
-        '<circle cx="10" cy="23.5" r="2.1" fill="#22c55e"' +
-        '  stroke="rgba(255,255,255,0.95)" stroke-width="0.9"/>'
+      ? '<circle cx="22" cy="12" r="2.8" fill="rgba(0,0,0,0.3)"/>' +
+        '<circle cx="22" cy="12" r="2" fill="#22c55e" stroke="rgba(255,255,255,0.9)" stroke-width="1"/>'
       : '') +
     '</svg>';
 
   return L.divIcon({
     className:  '',
-    iconSize:   [18, 30],
-    iconAnchor: [9, 15],
-    html: '<div style="transform:rotate(' + rot + 'deg);transform-origin:50% 50%;' +
-          'filter:' + shadow + ';opacity:' + op + ';display:inline-block">' + svg + '</div>'
+    iconSize:   [34, 22],
+    iconAnchor: [17, 11],
+    html: '<div style="transform:' + flip + ';filter:' + shadow + ';opacity:' + op + ';display:inline-block">' + svg + '</div>'
   });
 }
 
