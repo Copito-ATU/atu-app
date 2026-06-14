@@ -1,10 +1,27 @@
 import ROUTES from '../data/routes.json';
 
 const WALK_KMH        = 4.8;
-const BUS_KMH         = 18;   // velocidad realista para Lima (antes 25)
+const BUS_KMH         = 18;
 const DWELL_PER_STOP  = 1.5;
 const MAX_WALK_KM     = 1.5;
+const MAX_WALK_BRT    = 2.5;   // la gente camina más para tomar BRT/Metro
 const MAX_TRANSFER_KM = 0.6;
+const MAX_TRANSFER_BRT= 1.0;   // transbordos a BRT permiten más caminata
+
+// Velocidades reales por tipo de ruta (km/h)
+const SPEED_BY_TYPE = {
+  brt:        42,
+  metro:      48,
+  diametral:  18,
+  radial:     15,
+  periferica: 12,
+  circular:   16,
+};
+// Bonus de tiempo (min) que se aplica al score — hace que BRT/Metro compita
+const SCORE_BONUS = {
+  brt:   6,
+  metro: 5,
+};
 
 // ── Utilidades ────────────────────────────────────────────────────────────────
 export function haversineKm(lat1, lng1, lat2, lng2) {
@@ -23,7 +40,8 @@ function estimateRideMin(routeId, fromId, toId) {
   let km = 0;
   for (let i = s; i < e; i++)
     km += haversineKm(st[i].lat, st[i].lng, st[i+1].lat, st[i+1].lng);
-  return (km / BUS_KMH) * 60 + Math.abs(toId - fromId) * DWELL_PER_STOP;
+  const spd = SPEED_BY_TYPE[route.type] || BUS_KMH;
+  return (km / spd) * 60 + Math.abs(toId - fromId) * DWELL_PER_STOP;
 }
 
 export function getAllStations() {
@@ -71,11 +89,13 @@ function buildTransfers() {
   for (let i = 0; i < ROUTES.length; i++) {
     for (let j = i + 1; j < ROUTES.length; j++) {
       const rA = ROUTES[i], rB = ROUTES[j];
+      const isBrt = (r) => r.type === 'brt' || r.type === 'metro';
+      const maxTr = (isBrt(rA) || isBrt(rB)) ? MAX_TRANSFER_BRT : MAX_TRANSFER_KM;
       let bestDist = Infinity, bestPair = null;
       for (const stA of rA.stations) {
         for (const stB of rB.stations) {
           const d = haversineKm(stA.lat, stA.lng, stB.lat, stB.lng);
-          if (d < MAX_TRANSFER_KM && d < bestDist) {
+          if (d < maxTr && d < bestDist) {
             bestDist = d;
             bestPair = { rA: rA.id, stA: stA.id, rB: rB.id, stB: stB.id, walkKm: d };
           }
@@ -139,12 +159,14 @@ export function getBusArrivals(buses, routeId, boardId, alightId, walkMinutes) {
 // ── Estación más cercana por ruta ──────────────────────────────────────────────
 function nearestPerRoute(lat, lng) {
   return ROUTES.map(route => {
+    const isBrt = route.type === 'brt' || route.type === 'metro';
+    const maxKm = isBrt ? MAX_WALK_BRT : MAX_WALK_KM;
     let best = null, bestD = Infinity;
     route.stations.forEach(st => {
       const d = haversineKm(lat, lng, st.lat, st.lng);
       if (d < bestD) { bestD = d; best = st; }
     });
-    return bestD <= MAX_WALK_KM
+    return bestD <= maxKm
       ? { routeId: route.id, routeName: route.name, routeColor: route.color,
           routeType: route.type, station: best, walkKm: bestD }
       : null;
@@ -227,6 +249,12 @@ export function planJourney(fromLat, fromLng, toLat, toLng, buses) {
   const candidates = [];
 
   function tryJourney(legs, totalMin, numTransfers) {
+    // Bonus de score para BRT/Metro: penaliza menos en el ranking
+    const bonus = legs.filter(l => l.type === 'bus').reduce((acc, l) => {
+      const r = getRoute(l.routeId);
+      return acc + (SCORE_BONUS[r?.type] || 0);
+    }, 0);
+    const scoredMin = totalMin - bonus;
     const clonedLegs = legs.map(l => ({ ...l }));
     // Enrich first walk leg with fromLat/fromLng
     const firstWalk = clonedLegs.find(l => l.type === 'walk');
@@ -246,6 +274,7 @@ export function planJourney(fromLat, fromLng, toLat, toLng, buses) {
     }
     candidates.push({
       totalMinutes: Math.round(totalMin),
+      _scoredMinutes: scoredMin,
       transfers: numTransfers,
       legs: clonedLegs,
       mapSegments: clonedLegs.map(leg => ({
@@ -341,5 +370,6 @@ export function planJourney(fromLat, fromLng, toLat, toLng, buses) {
     return { error: `La parada más cercana es "${o.station.name}" (${(o.walkKm*1000).toFixed(0)} m). No se encontró ruta hacia ese destino.` };
   }
 
-  return { alternatives: pickDiverse(candidates.sort((a, b) => a.totalMinutes - b.totalMinutes), 3) };
+  candidates.sort((a, b) => a._scoredMinutes - b._scoredMinutes);
+  return { alternatives: pickDiverse(candidates, 3) };
 }
