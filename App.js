@@ -720,7 +720,7 @@ function MainApp({ user }) {
       <BottomNav tab={tab} setTab={setTab} />
 
       {/* FAB Yatu — visible fuera del Inicio */}
-      {(tab === 'noticias' || tab === 'alertas' || tab === 'billetera' || tab === 'paraderos') && (
+      {(tab === 'noticias' || tab === 'alertas' || tab === 'billetera') && (
         <YatuFab key={tab} onPress={() => setScreen('yatu')} />
       )}
 
@@ -1757,7 +1757,7 @@ const ns = StyleSheet.create({
 // ── Bottom Nav ────────────────────────────────────────────────────────────────
 const NAV_TABS = [
   { key: 'home',      iconOn: 'home',          iconOff: 'home-outline',          label: 'Inicio'    },
-  { key: 'paraderos', iconOn: 'bus',           iconOff: 'bus-outline',           label: 'Paraderos' },
+  { key: 'noticias',  iconOn: 'newspaper',     iconOff: 'newspaper-outline',     label: 'Noticias'  },
   { key: 'alertas',   iconOn: 'notifications', iconOff: 'notifications-outline', label: 'Alertas'   },
   { key: 'billetera', iconOn: 'wallet',        iconOff: 'wallet-outline',        label: 'Billetera' },
 ];
