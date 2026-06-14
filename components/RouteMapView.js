@@ -496,9 +496,11 @@ function busIcon(color, dir, catchable, bearing) {
   var shadow = catchable !== false
     ? 'drop-shadow(0 3px 8px rgba(0,0,0,0.55))'
     : 'drop-shadow(0 1px 3px rgba(0,0,0,0.2))';
-  var flip = (rot > 180 && rot <= 360) ? 'scaleX(-1)' : 'scaleX(1)';
+  // Right side of image = assumed front; rotate so it faces bearing
+  var rotDeg = rot - 90;
   var dot = catchable !== false
-    ? '<div style="position:absolute;bottom:2px;left:50%;transform:translateX(-50%);' +
+    ? '<div style="position:absolute;top:50%;left:50%;' +
+      'transform:translate(-50%,-50%);' +
       'width:10px;height:10px;border-radius:50%;background:#22c55e;' +
       'border:1.5px solid white;pointer-events:none"></div>'
     : '';
@@ -506,7 +508,8 @@ function busIcon(color, dir, catchable, bearing) {
     className:  '',
     iconSize:   [38, 38],
     iconAnchor: [19, 19],
-    html: '<div style="position:relative;display:inline-block;transform:' + flip + ';' +
+    html: '<div style="position:relative;display:inline-block;' +
+          'transform:rotate(' + rotDeg + 'deg);transform-origin:50% 50%;' +
           'filter:' + shadow + ';opacity:' + op + '">' +
           '<img src="data:image/png;base64,' + BUS_ICO_B64 + '" width="38" height="38">' +
           dot +
