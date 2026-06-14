@@ -1142,33 +1142,6 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
           })}
         </Reveal>
 
-        {/* Próximas salidas cerca */}
-        <Reveal delay={380} style={hs.section}>
-          <View style={hs.sectionRow}>
-            <Text style={hs.sectionTitle}>Próximas salidas cerca</Text>
-            <TouchableOpacity onPress={onGoParaderos} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={hs.sectionMore}>Ver todas ›</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={{ gap: 9 }}>
-            {NEXT_DEPARTURES.map((d, i) => (
-              <TouchableOpacity key={i} style={[hs.depCard, d.warn && hs.depCardWarn]} activeOpacity={0.85} onPress={onGoParaderos}>
-                <View style={[hs.depBadge, { backgroundColor: d.sysColor }]}>
-                  <Text style={hs.depBadgeTxt} numberOfLines={1}>{d.system}</Text>
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={hs.depName} numberOfLines={1}>{d.stop} · <Text style={hs.depFare}>{d.fare}</Text></Text>
-                  <Text style={[hs.depSub, d.warn && { color: C.amber, fontWeight: '700' }]} numberOfLines={1}>{d.sub}</Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[hs.depMin, { color: d.minColor }]}>{d.min}</Text>
-                  <Text style={hs.depTime}>{d.time}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </Reveal>
-
         {/* Recientes */}
         {recents.length > 0 && (
           <Reveal delay={340} style={hs.section}>
