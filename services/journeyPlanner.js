@@ -83,11 +83,33 @@ function nearestStationIndex(route, lat, lng) {
 
 // ── Pre-calcular transbordos entre rutas (lazy, una sola vez) ─────────────────
 let _transfers = null;
+let _bboxes    = null;
+
+function _buildBboxes() {
+  if (_bboxes) return _bboxes;
+  _bboxes = ROUTES.map(r => {
+    let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+    for (const s of r.stations) {
+      if (s.lat < minLat) minLat = s.lat;
+      if (s.lat > maxLat) maxLat = s.lat;
+      if (s.lng < minLng) minLng = s.lng;
+      if (s.lng > maxLng) maxLng = s.lng;
+    }
+    return { minLat, maxLat, minLng, maxLng };
+  });
+  return _bboxes;
+}
+
 function buildTransfers() {
   if (_transfers) return _transfers;
+  const bboxes = _buildBboxes();
+  const BUF = 0.02; // ~2.2 km in degrees — larger than any MAX_TRANSFER value
   _transfers = [];
   for (let i = 0; i < ROUTES.length; i++) {
     for (let j = i + 1; j < ROUTES.length; j++) {
+      const bA = bboxes[i], bB = bboxes[j];
+      if (bA.maxLat + BUF < bB.minLat || bA.minLat - BUF > bB.maxLat) continue;
+      if (bA.maxLng + BUF < bB.minLng || bA.minLng - BUF > bB.maxLng) continue;
       const rA = ROUTES[i], rB = ROUTES[j];
       const isBrt = (r) => r.type === 'brt' || r.type === 'metro';
       const maxTr = (isBrt(rA) || isBrt(rB)) ? MAX_TRANSFER_BRT : MAX_TRANSFER_KM;
