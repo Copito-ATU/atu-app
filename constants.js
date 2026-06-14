@@ -1,8 +1,5 @@
 export const FIREBASE_URL = 'https://atu-hackathon-2026-default-rtdb.firebaseio.com';
 
-// URL del simulador local (misma red WiFi)
-export const SIM_URL = 'http://192.168.0.102:5000';
-
 // TomTom Traffic API — gratis en https://developer.tomtom.com
 // Reemplaza con tu key cuando la tengas
 export const TOMTOM_KEY = 'qXBEN3V6r54E7cQeknYL0SmbYjVAUynd';
