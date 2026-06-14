@@ -202,7 +202,7 @@ function nearestPerRoute(lat, lng) {
 
 function busTypeId(route) {
   if (!route) return 'omnibus';
-  if (route.id === 'METRO')  return 'metropolitano';
+  if (route.id?.startsWith('METRO_') || route.id === 'METRO' || route.id === 'METRO_EXP') return 'metropolitano';
   if (route.id === 'LINEA1') return 'linea1';
   if (route.id?.startsWith('C'))  return 'corredor';
   const c = (route.carroceria || '').toUpperCase();
@@ -237,12 +237,18 @@ function getPrimaryKey(journey) {
 function labelAlternative(alt, isFirst) {
   if (isFirst) return 'Más rápida';
   const busLegs = alt.legs.filter(l => l.type === 'bus');
-  const hasMetro  = busLegs.some(l => l.routeId === 'METRO' || l.busTypeId === 'metropolitano');
+  // Priorizar expreso/super sobre regular al etiquetar
+  const metroLeg = busLegs.find(l => l.routeId?.includes('EXP') || l.routeId?.includes('SX') || l.routeId?.includes('LECH'))
+                || busLegs.find(l => l.routeId?.startsWith('METRO_'));
+  if (metroLeg) {
+    const r = getRoute(metroLeg.routeId);
+    if (r) return r.name.replace('Metropolitano ', 'Metro ');
+    return 'Metropolitano';
+  }
   const hasLinea1 = busLegs.some(l => l.routeId === 'LINEA1' || l.busTypeId === 'linea1');
   const hasBrt    = busLegs.some(l => l.busTypeId === 'brt' || l.routeType === 'brt');
-  if (hasMetro)  return 'Con Metropolitano';
-  if (hasLinea1) return 'Con Línea 1';
-  if (hasBrt)    return 'Corredor exclusivo';
+  if (hasLinea1)   return 'Con Línea 1';
+  if (hasBrt)      return 'Corredor exclusivo';
   if (alt.transfers === 0) return 'Sin transbordo';
   return 'Alternativa';
 }
