@@ -9,10 +9,14 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.solera.atulima"
+      "bundleIdentifier": "com.solera.atulima",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Usamos el micrófono para búsqueda por voz de destinos."
+      }
     },
     "android": {
       "package": "com.solera.atulima",
+      "permissions": ["RECORD_AUDIO"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
