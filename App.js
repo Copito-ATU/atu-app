@@ -1142,6 +1142,25 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
           })}
         </Reveal>
 
+        {/* Acceso a Paraderos cercanos */}
+        <Reveal delay={320}>
+          <TouchableOpacity style={hs.noticiasTeaser} activeOpacity={0.88} onPress={onGoParaderos}>
+            <View style={hs.noticiasTeaserLeft}>
+              <View style={hs.teaserIconBox}>
+                <Ionicons name="bus" size={18} color={C.blueBright} />
+              </View>
+              <View>
+                <Text style={hs.noticiasTeaserTitle}>Paraderos cercanos</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 }}>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: C.green }} />
+                  <Text style={hs.noticiasTeaserSub}>Llegadas en vivo · toca para ver</Text>
+                </View>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#C5CDD8" />
+          </TouchableOpacity>
+        </Reveal>
+
         {/* Recientes */}
         {recents.length > 0 && (
           <Reveal delay={340} style={hs.section}>
@@ -2055,6 +2074,17 @@ const SYSTEM_CFG = {
 };
 const sysCfg = name => SYSTEM_CFG[name] || SYSTEM_CFG['METROPOLITANO'];
 
+// Foto de cada sistema. Reemplaza los archivos en assets/paraderos/ con tus
+// propias fotos (mismo nombre) y aparecerán automáticamente en las tarjetas.
+const SYSTEM_PHOTO = {
+  'METROPOLITANO':  require('./assets/paraderos/metropolitano.png'),
+  'CORREDOR ROJO':  require('./assets/paraderos/corredor-rojo.png'),
+  'CORREDOR AZUL':  require('./assets/paraderos/corredor-azul.png'),
+  'LÍNEA 1 · TREN': require('./assets/paraderos/linea1.png'),
+  'LÍNEA 2 · TREN': require('./assets/paraderos/linea2.png'),
+};
+const sysPhoto = name => SYSTEM_PHOTO[name] || SYSTEM_PHOTO['METROPOLITANO'];
+
 const NEARBY_STOPS = [
   { name: 'Est. Ricardo Palma', system: 'METROPOLITANO', dist: '180 m', walk: '3 min', accessible: true,
     services: [
@@ -2105,23 +2135,32 @@ function ParaderosScreen({ userLat, userLng, onGoYatu }) {
           const cfg = sysCfg(st.system);
           return (
             <Reveal key={i} delay={i * 90} distance={20} style={ps.card}>
-              {/* Encabezado del paradero */}
-              <View style={ps.stopTop}>
-                <View style={[ps.sysIcon, { backgroundColor: cfg.color }]}>
-                  <Ionicons name={st.system.startsWith('LÍNEA') ? 'train' : 'bus'} size={17} color="#fff" />
+              {/* Foto del sistema · estilo Instagram */}
+              <View style={ps.photoWrap}>
+                <Image source={sysPhoto(st.system)} style={ps.photo} resizeMode="cover" />
+                <LinearGradient
+                  colors={['rgba(5,18,46,0)', 'rgba(5,18,46,0.25)', 'rgba(5,18,46,0.92)']}
+                  start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+                  style={StyleSheet.absoluteFill} pointerEvents="none"
+                />
+                {/* Chips superiores */}
+                <View style={ps.photoTopRow}>
+                  <View style={ps.photoSysChip}>
+                    <Ionicons name={st.system.startsWith('LÍNEA') ? 'train' : 'bus'} size={12} color="#fff" />
+                    <Text style={ps.photoSysTxt}>{st.system}</Text>
+                  </View>
+                  {st.accessible && (
+                    <View style={ps.photoAcc}><Ionicons name="accessibility" size={14} color="#fff" /></View>
+                  )}
                 </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={ps.stopName} numberOfLines={1}>{st.name}</Text>
-                  <View style={ps.stopMeta}>
-                    <View style={[ps.sysChip, { backgroundColor: cfg.tint }]}>
-                      <Text style={[ps.sysChipTxt, { color: cfg.color }]}>{st.system}</Text>
-                    </View>
-                    <Text style={ps.stopDist} numberOfLines={1}>· {st.dist} · {st.walk} a pie</Text>
+                {/* Nombre + distancia sobre la foto */}
+                <View style={ps.photoBottom}>
+                  <Text style={ps.photoName} numberOfLines={1}>{st.name}</Text>
+                  <View style={ps.photoMetaRow}>
+                    <Ionicons name="walk" size={13} color="rgba(255,255,255,0.85)" />
+                    <Text style={ps.photoMeta}>{st.dist} · {st.walk} a pie</Text>
                   </View>
                 </View>
-                {st.accessible && (
-                  <View style={ps.accBox}><Ionicons name="accessibility" size={15} color={C.green} /></View>
-                )}
               </View>
 
               {/* Servicios que pasan por el paradero */}
@@ -3156,27 +3195,31 @@ const ps = StyleSheet.create({
   liveDot:      { width: 6, height: 6, borderRadius: 3, backgroundColor: '#34D399' },
   liveTxt:      { color: '#fff', fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
 
-  list:         { padding: 16, gap: 14 },
-  card:         { backgroundColor: '#fff', borderRadius: 18, padding: 15, ...SHADOW.card },
-  stopTop:      { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  sysIcon:      { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  stopName:     { fontSize: 15.5, fontWeight: '800', color: C.text },
-  stopMeta:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
-  sysChip:      { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  sysChipTxt:   { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
-  stopDist:     { flex: 1, fontSize: 11, fontWeight: '600', color: C.textFaint },
-  accBox:       { width: 30, height: 30, borderRadius: 9, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  list:         { padding: 16, gap: 16 },
+  card:         { backgroundColor: '#fff', borderRadius: RAD.xl, overflow: 'hidden', borderWidth: 1, borderColor: C.hair, ...SHADOW.lift },
 
-  svcWrap:      { marginTop: 12, backgroundColor: '#F7F9FD', borderRadius: 13, paddingHorizontal: 12 },
-  svcRow:       { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11 },
-  svcBorder:    { borderBottomWidth: 1, borderBottomColor: '#EAEFF7' },
-  codeBadge:    { minWidth: 38, height: 30, borderRadius: 9, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
+  // Foto header estilo Instagram
+  photoWrap:    { height: 150, justifyContent: 'space-between' },
+  photo:        { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  photoTopRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12 },
+  photoSysChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(5,18,46,0.42)', borderRadius: RAD.pill, paddingHorizontal: 10, paddingVertical: 5 },
+  photoSysTxt:  { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
+  photoAcc:     { width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(5,18,46,0.42)', alignItems: 'center', justifyContent: 'center' },
+  photoBottom:  { paddingHorizontal: 14, paddingBottom: 13 },
+  photoName:    { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: -0.4 },
+  photoMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  photoMeta:    { color: 'rgba(255,255,255,0.88)', fontSize: 12, fontWeight: '700' },
+
+  svcWrap:      { marginTop: 14, marginHorizontal: 14, backgroundColor: 'rgba(243,246,252,0.65)', borderRadius: RAD.lg, borderWidth: 1, borderColor: 'rgba(231,237,246,0.9)', paddingHorizontal: 13 },
+  svcRow:       { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 12 },
+  svcBorder:    { borderBottomWidth: 1, borderBottomColor: 'rgba(231,237,246,0.8)' },
+  codeBadge:    { minWidth: 40, height: 31, borderRadius: 10, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center' },
   codeTxt:      { color: '#fff', fontSize: 13, fontWeight: '900', letterSpacing: -0.2 },
   svcDesc:      { flex: 1, fontSize: 13, fontWeight: '600', color: C.text },
   svcTimeWrap:  { flexDirection: 'row', alignItems: 'center' },
   svcTime:      { fontSize: 13, fontWeight: '800', color: C.text },
 
-  detailBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 12, height: 40, marginTop: 12 },
+  detailBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: RAD.pill, height: 42, marginTop: 14, marginHorizontal: 14, marginBottom: 14 },
   detailTxt:    { fontSize: 13, fontWeight: '800' },
 });
 
