@@ -7,17 +7,19 @@ import { Ionicons } from '@expo/vector-icons';
 // incidents:    [{ id, lat, lng, type, severity, description }]
 // routesGeo:    [{ id, code, latlngs, color, tipo, interval, fleet }]
 // stations:     [{ id, name, lat, lng, system, demand }]
+// tambos:       [{ id, lat, lng, name, address }]
 // liveUserLat/Lng: live GPS position (injected via JS, does NOT rebuild HTML)
-export default function RouteMapView({ segments, fromLat, fromLng, toLat, toLng, liveBuses, incidents, routesGeo, stations, liveUserLat, liveUserLng }) {
+export default function RouteMapView({ segments, fromLat, fromLng, toLat, toLng, liveBuses, incidents, routesGeo, stations, tambos, liveUserLat, liveUserLng, trafficCode }) {
   const webRef       = useRef(null);
   const liveBusesRef = useRef(liveBuses);
   const incidentsRef = useRef(incidents);
   const routesRef    = useRef(routesGeo);
   const stationsRef  = useRef(stations);
+  const tambosRef    = useRef(tambos);
 
   const html = useMemo(
-    () => buildHtml(segments, fromLat, fromLng, toLat, toLng),
-    [segments, fromLat, fromLng, toLat, toLng]
+    () => buildHtml(segments, fromLat, fromLng, toLat, toLng, trafficCode),
+    [segments, fromLat, fromLng, toLat, toLng, trafficCode]
   );
 
   useEffect(() => {
@@ -53,6 +55,14 @@ export default function RouteMapView({ segments, fromLat, fromLng, toLat, toLng,
   }, [stations]);
 
   useEffect(() => {
+    tambosRef.current = tambos;
+    if (!webRef.current || !tambos?.length) return;
+    webRef.current.injectJavaScript(
+      `if(typeof loadTambos==='function'){loadTambos(${JSON.stringify(tambos)});}true;`
+    );
+  }, [tambos]);
+
+  useEffect(() => {
     if (!webRef.current || liveUserLat == null) return;
     webRef.current.injectJavaScript(
       `if(typeof updateUserPos==='function'){updateUserPos(${liveUserLat},${liveUserLng});}true;`
@@ -75,6 +85,10 @@ export default function RouteMapView({ segments, fromLat, fromLng, toLat, toLng,
     if (stationsRef.current?.length)
       webRef.current?.injectJavaScript(
         `if(typeof loadStations==='function'){loadStations(${JSON.stringify(stationsRef.current)});}true;`
+      );
+    if (tambosRef.current?.length)
+      webRef.current?.injectJavaScript(
+        `if(typeof loadTambos==='function'){loadTambos(${JSON.stringify(tambosRef.current)});}true;`
       );
   }
 
@@ -101,8 +115,23 @@ export default function RouteMapView({ segments, fromLat, fromLng, toLat, toLng,
   );
 }
 
-function buildHtml(segments, fromLat, fromLng, toLat, toLng) {
+function buildHtml(segments, fromLat, fromLng, toLat, toLng, trafficCode) {
   const payload = JSON.stringify({ segments: segments || [], fromLat, fromLng, toLat, toLng });
+
+  // Color de sombra del polyline según nivel de tráfico
+  const trafficShadow = {
+    peak:   'rgba(239,68,68,0.32)',
+    high:   'rgba(245,158,11,0.28)',
+    normal: 'rgba(0,0,0,0.12)',
+    low:    'rgba(34,197,94,0.20)',
+  }[trafficCode] || 'rgba(0,0,0,0.12)';
+
+  const trafficBadge = {
+    peak:   { bg: '#fef2f2', color: '#ef4444', icon: '🔴', label: 'Hora pico' },
+    high:   { bg: '#fff8ed', color: '#f59e0b', icon: '🟡', label: 'Flujo alto' },
+    normal: { bg: '#f0fdf4', color: '#22c55e', icon: '🟢', label: 'Flujo normal' },
+    low:    { bg: '#eff6ff', color: '#3b82f6', icon: '🔵', label: 'Flujo bajo' },
+  }[trafficCode] || null;
 
   return `<!DOCTYPE html>
 <html>
@@ -126,6 +155,17 @@ function buildHtml(segments, fromLat, fromLng, toLat, toLng) {
     100% { transform:scale(2.6); opacity:0; }
   }
   .board-pulse { animation:board-pulse 2s ease-out infinite; border-radius:50%; position:absolute; width:100%; height:100%; top:0; left:0; }
+
+  @keyframes traffic-pulse {
+    0%,100% { stroke-opacity:0.75; }
+    50%     { stroke-opacity:0.18; }
+  }
+  @keyframes traffic-flow {
+    to { stroke-dashoffset:-22; }
+  }
+  @keyframes approach-flow {
+    to { stroke-dashoffset:-28; }
+  }
 </style>
 </head>
 <body><div id="map"></div>
@@ -147,19 +187,30 @@ function decodePoly(str) {
 var d = ${payload};
 var map = L.map('map',{zoomControl:false,attributionControl:false});
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
-  maxZoom:19,subdomains:'abcd'
+  maxZoom:22, maxNativeZoom:19, subdomains:'abcd'
 }).addTo(map);
 
 var bounds = [];
+
+function closestIdx(latlngs, lat, lng) {
+  var best = 0, bestD = Infinity;
+  for (var i = 0; i < latlngs.length; i++) {
+    var dlat = latlngs[i][0] - lat, dlng = latlngs[i][1] - lng;
+    var d = dlat * dlat + dlng * dlng;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
 
 // Index bus segments by routeId so updateLiveBuses can draw approach lines
 var busRouteMap = {};
 (d.segments||[]).forEach(function(seg){
   if (!seg.dashed && seg.routeId && seg.fromLat != null) {
     busRouteMap[seg.routeId] = {
-      color:    seg.color || '#1668AD',
-      boardLat: seg.fromLat, boardLng: seg.fromLng,
-      alightLat: seg.toLat,  alightLng: seg.toLng,
+      color:      seg.color || '#1668AD',
+      boardLat:   seg.fromLat, boardLng: seg.fromLng,
+      alightLat:  seg.toLat,   alightLng: seg.toLng,
+      latlngs:    seg.routeLatlngs || [],
     };
   }
 });
@@ -217,8 +268,32 @@ function mkAlightIcon(color) {
       }
     }
   } else {
-    L.polyline(pts, {color:'rgba(0,0,0,0.12)',weight:7,opacity:1}).addTo(map);
+    // Sombra con color de tráfico
+    var shadow = L.polyline(pts, {color:'${trafficShadow}',weight:9,opacity:1});
+    shadow.addTo(map);
+    var shadowEl = shadow.getElement && shadow.getElement();
+    if (shadowEl) {
+      ${trafficCode === 'peak'
+        ? "shadowEl.style.animation = 'traffic-pulse 1.3s ease-in-out infinite';"
+        : trafficCode === 'high'
+        ? "shadowEl.style.animation = 'traffic-pulse 2s ease-in-out infinite';"
+        : '// sin animación en tráfico bajo'}
+    }
+
+    // Línea de ruta con su color original
     L.polyline(pts, {color:color,weight:5,opacity:0.95}).addTo(map);
+
+    // Overlay de flujo de tráfico (solo en hora pico o flujo alto)
+    ${trafficCode === 'peak' || trafficCode === 'high' ? `
+    var flowColor = '${trafficCode === 'peak' ? '#ef4444' : '#f59e0b'}';
+    var flowLine = L.polyline(pts, {
+      color: flowColor, weight: 4, opacity: 0.7,
+      dashArray: '12, 9',
+    });
+    flowLine.addTo(map);
+    var flowEl = flowLine.getElement && flowLine.getElement();
+    if (flowEl) flowEl.style.animation = 'traffic-flow ${trafficCode === 'peak' ? '0.7s' : '1.1s'} linear infinite';
+    ` : '// sin overlay de flujo'}
 
     if (seg.fromLat != null) {
       L.marker([seg.fromLat,seg.fromLng],{icon:mkBoardIcon(color)})
@@ -232,12 +307,14 @@ function mkAlightIcon(color) {
     }
     if (seg.label) {
       var mid = pts[Math.floor(pts.length/2)];
+      // Show only the route code: last word if multi-word (e.g. "Corredor C101" → "C101")
+      var shortLabel = seg.label.trim().split(/\s+/).pop();
       L.marker(mid,{
         icon: L.divIcon({
           className:'',
           html:'<div style="background:'+color+';color:#fff;font-size:10px;font-weight:800;'+
-               'padding:2px 7px;border-radius:8px;white-space:nowrap;'+
-               'box-shadow:0 1px 5px rgba(0,0,0,0.22);font-family:sans-serif">'+seg.label+'</div>',
+               'padding:2px 6px;border-radius:6px;white-space:nowrap;'+
+               'box-shadow:0 1px 4px rgba(0,0,0,0.2);font-family:sans-serif">'+shortLabel+'</div>',
           iconAnchor:[0,0]
         }),
         interactive:false
@@ -264,13 +341,17 @@ function mkAlightIcon(color) {
 if (d.fromLat != null && d.fromLng != null) {
   bounds.push([d.fromLat,d.fromLng]);
   L.marker([d.fromLat,d.fromLng],{
+    zIndexOffset: 2000,
     icon:L.divIcon({
-      className:'',iconSize:[36,44],iconAnchor:[18,44],
+      className:'',iconSize:[40,48],iconAnchor:[20,48],
       html:'<div style="display:flex;flex-direction:column;align-items:center">'+
-           '<div style="width:34px;height:34px;background:#1668AD;border-radius:50%;'+
-           'border:3px solid #fff;box-shadow:0 3px 10px rgba(22,104,173,0.5);'+
-           'display:flex;align-items:center;justify-content:center;">'+
-           '<div style="width:12px;height:12px;background:#fff;border-radius:50%"></div>'+
+           '<div style="position:relative;width:40px;height:40px;display:flex;align-items:center;justify-content:center">'+
+           '<div style="position:absolute;width:40px;height:40px;border-radius:50%;background:#1668AD;opacity:0.18;animation:board-pulse 2s ease-out infinite"></div>'+
+           '<div style="width:30px;height:30px;background:#1668AD;border-radius:50%;'+
+           'border:3px solid #fff;box-shadow:0 3px 12px rgba(22,104,173,0.55);'+
+           'display:flex;align-items:center;justify-content:center;position:relative;z-index:1">'+
+           '<div style="font-size:16px;line-height:1">🧍</div>'+
+           '</div>'+
            '</div>'+
            '<div style="width:2px;height:10px;background:#1668AD;opacity:0.7"></div>'+
            '</div>'
@@ -468,24 +549,46 @@ function busIcon(color, dir, catchable, bearing) {
 
 function updateLiveBuses(buses) {
   var seen = {};
+
+  // Paso 1: encontrar el bus catchable más lejano por ruta+dirección (el "último" en la cola)
+  // Clave = routeId:dirección para que N y S tengan líneas separadas
+  var furthestByRoute = {};
+  buses.forEach(function(b) {
+    var catchable = b.catchable !== undefined ? b.catchable : true;
+    if (!catchable || !b.routeId) return;
+    var rseg = busRouteMap[b.routeId];
+    if (!rseg) return;
+    var key = b.routeId + ':' + (b.direction || 'N');
+    var rll = rseg.latlngs;
+    var score;
+    if (rll && rll.length > 2) {
+      var bi = closestIdx(rll, b.lat, b.lng);
+      var pi = closestIdx(rll, rseg.boardLat, rseg.boardLng);
+      score = Math.abs(bi - pi);
+    } else {
+      var dlat = b.lat - rseg.boardLat, dlng = b.lng - rseg.boardLng;
+      score = dlat * dlat + dlng * dlng;
+    }
+    if (!furthestByRoute[key] || score > furthestByRoute[key].score) {
+      furthestByRoute[key] = { b: b, score: score };
+    }
+  });
+
+  // Paso 2: actualizar marcadores de buses (todos)
   buses.forEach(function(b) {
     seen[b.id] = true;
     var catchable = b.catchable !== undefined ? b.catchable : true;
     var color = b.routeColor || '#1668AD';
 
-    // 1. Try movement bearing: compare current vs last known position
     var prev = prevPos[b.id];
     if (prev) {
-      var dlat = b.lat - prev.lat;
-      var dlng = b.lng - prev.lng;
-      // Only update rotation if the bus actually moved (avoid noise from tiny drifts)
+      var dlat = b.lat - prev.lat, dlng = b.lng - prev.lng;
       if (Math.abs(dlat) > 0.000005 || Math.abs(dlng) > 0.000005) {
         busRotations[b.id] = calcBearing(prev.lat, prev.lng, b.lat, b.lng);
       }
     }
     prevPos[b.id] = { lat: b.lat, lng: b.lng };
 
-    // 2. If no movement yet, seed from route geometry
     if (busRotations[b.id] === undefined) {
       var rll = routeLatLngs[b.routeId];
       if (rll && rll.length > 1) {
@@ -493,9 +596,7 @@ function updateLiveBuses(buses) {
       }
     }
 
-    // 3. Final fallback: N/S compass string
     var bearing = busRotations[b.id] !== undefined ? busRotations[b.id] : null;
-
     var icon = busIcon(color, b.direction, catchable, bearing);
     if (liveMarkers[b.id]) {
       liveMarkers[b.id].setLatLng([b.lat, b.lng]);
@@ -503,42 +604,61 @@ function updateLiveBuses(buses) {
       liveMarkers[b.id].setZIndexOffset(catchable ? 500 : 50);
     } else {
       liveMarkers[b.id] = L.marker([b.lat, b.lng], {
-        icon: icon,
-        zIndexOffset: catchable ? 500 : 50
+        icon: icon, zIndexOffset: catchable ? 500 : 50
       }).addTo(map);
     }
+  });
 
-    // Approach line: dashed colored arrow from bus → board stop
+  // Paso 3: una sola línea de aproximación por ruta+dirección (desde el bus más lejano)
+  var seenRoutes = {};
+  Object.keys(furthestByRoute).forEach(function(key) {
+    seenRoutes[key] = true;
+    var b    = furthestByRoute[key].b;
     var rseg = busRouteMap[b.routeId];
-    if (rseg && catchable) {
-      var apt = [[b.lat, b.lng], [rseg.boardLat, rseg.boardLng]];
-      if (approachLines[b.id]) {
-        approachLines[b.id].setLatLngs(apt);
+    var apt;
+    var rll = rseg.latlngs;
+    if (rll && rll.length > 2) {
+      var busIdx   = closestIdx(rll, b.lat, b.lng);
+      var boardIdx = closestIdx(rll, rseg.boardLat, rseg.boardLng);
+      if (busIdx !== boardIdx) {
+        apt = busIdx < boardIdx
+          ? rll.slice(busIdx, boardIdx + 1)
+          : rll.slice(boardIdx, busIdx + 1).reverse();
       } else {
-        approachLines[b.id] = L.polyline(apt, {
-          color:     rseg.color,
-          weight:    2.5,
-          opacity:   0.6,
-          dashArray: '4, 8',
-          lineJoin:  'round',
-        }).addTo(map);
-        approachLines[b.id].bringToBack();
+        apt = [[b.lat, b.lng], [rseg.boardLat, rseg.boardLng]];
       }
-    } else if (approachLines[b.id]) {
-      map.removeLayer(approachLines[b.id]);
-      delete approachLines[b.id];
+    } else {
+      apt = [[b.lat, b.lng], [rseg.boardLat, rseg.boardLng]];
+    }
+    if (approachLines[key]) {
+      approachLines[key].setLatLngs(apt);
+    } else {
+      approachLines[key] = L.polyline(apt, {
+        color: '#9AA4B5', weight: 3, opacity: 0.72,
+        dashArray: '8, 12', lineJoin: 'round', lineCap: 'round',
+      }).addTo(map);
+      approachLines[key].bringToBack();
+      var _ap = approachLines[key];
+      setTimeout(function() {
+        var el = _ap.getElement && _ap.getElement();
+        if (el) el.style.animation = 'approach-flow 1s linear infinite';
+      }, 60);
     }
   });
+
+  // Limpiar marcadores y líneas de rutas que ya no están
   Object.keys(liveMarkers).forEach(function(id) {
     if (!seen[id]) {
       map.removeLayer(liveMarkers[id]);
       delete liveMarkers[id];
       delete prevPos[id];
       delete busRotations[id];
-      if (approachLines[id]) {
-        map.removeLayer(approachLines[id]);
-        delete approachLines[id];
-      }
+    }
+  });
+  Object.keys(approachLines).forEach(function(routeId) {
+    if (!seenRoutes[routeId]) {
+      map.removeLayer(approachLines[routeId]);
+      delete approachLines[routeId];
     }
   });
 }
@@ -600,10 +720,8 @@ function loadRoutesGeo(routes) {
   (routes || []).forEach(function(r) {
     if (!r.latlngs || r.latlngs.length < 2) return;
     routeLatLngs[r.id] = r.latlngs;
-    var popup = '<div style="font-family:sans-serif;padding:2px">' +
-      '<b style="font-size:13px;color:#111">Ruta ' + r.code + '</b>' +
-      '<br><span style="font-size:11px;color:#555">' + (r.tipo || '') + '</span>' +
-      (r.interval ? '<br><span style="font-size:11px;color:#16a34a">Cada ' + r.interval + ' min · ' + r.fleet + ' buses</span>' : '') +
+    var popup = '<div style="font-family:sans-serif;padding:2px 4px">' +
+      '<b style="font-size:13px;color:#111">' + r.code + '</b>' +
       '</div>';
     routePolylines[r.id] = L.polyline(r.latlngs, {
       color:   r.color || '#94a3b8',
@@ -616,6 +734,24 @@ function loadRoutesGeo(routes) {
 // ── Estaciones ATU ───────────────────────────────────────────────────────────
 var stationLayers = [];
 
+function mkStopIcon(color) {
+  return L.divIcon({
+    className:'', iconSize:[36,46], iconAnchor:[18,46],
+    html:'<svg width="36" height="46" viewBox="0 0 44 56" xmlns="http://www.w3.org/2000/svg">'+
+           '<path d="M22,54 C22,54 3,38 3,21 A19,19 0 1,1 41,21 C41,38 22,54 22,54Z" fill="'+color+'"/>'+
+           '<circle cx="22" cy="21" r="14" fill="none" stroke="white" stroke-width="2.5"/>'+
+           '<rect x="18" y="7" width="8" height="4" rx="1" fill="white"/>'+
+           '<rect x="11" y="11" width="22" height="18" rx="2" fill="white"/>'+
+           '<rect x="13" y="13" width="18" height="10" rx="1" fill="'+color+'"/>'+
+           '<rect x="11" y="24" width="22" height="4" rx="0.5" fill="white"/>'+
+           '<circle cx="16.5" cy="26" r="2" fill="'+color+'"/>'+
+           '<circle cx="27.5" cy="26" r="2" fill="'+color+'"/>'+
+           '<rect x="13" y="29" width="6" height="4" rx="1" fill="white"/>'+
+           '<rect x="25" y="29" width="6" height="4" rx="1" fill="white"/>'+
+         '</svg>'
+  });
+}
+
 function loadStations(stations) {
   stationLayers.forEach(function(m) { map.removeLayer(m); });
   stationLayers = [];
@@ -624,21 +760,66 @@ function loadStations(stations) {
     var isCosac  = st.system === 'cosac';
     var isLinea1 = st.system === 'linea1';
     var color    = isCosac ? '#f0a500' : isLinea1 ? '#003087' : '#1668AD';
-    var size     = st.demand ? Math.min(Math.max(Math.round(st.demand / 8000) + 6, 6), 16) : 8;
-    var circle   = L.circleMarker([st.lat, st.lng], {
-      radius: size, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9,
-    });
-    circle.bindPopup(
-      '<b style="font-size:13px">' + st.name + '</b>' +
-      '<br><span style="font-size:11px;color:#555">' + (isCosac ? 'Metropolitano' : isLinea1 ? 'Línea 1 Metro' : 'Parada') + '</span>' +
-      (st.demand ? '<br><span style="color:#888;font-size:11px">~' + Math.round(st.demand / 1000) + 'k validaciones/mes</span>' : '') +
-      (st.interval ? '<br><span style="color:#16a34a;font-size:11px">Cada ' + st.interval + ' min</span>' : ''),
-      { maxWidth: 200 }
-    );
-    circle.addTo(map);
-    stationLayers.push(circle);
+    var marker   = L.marker([st.lat, st.lng], { icon: mkStopIcon(color) });
+    marker.bindTooltip(st.name || '', { className:'stop-lbl', direction:'top', offset:[0,-26] });
+    marker.addTo(map);
+    stationLayers.push(marker);
   });
 }
+// ── Tiendas Tambo+ ───────────────────────────────────────────────────────────
+var tamboLayers = [];
+var tamboIcon = L.divIcon({
+  className: '',
+  iconSize: [52, 34],
+  iconAnchor: [26, 34],
+  html: '<div style="display:flex;flex-direction:column;align-items:center;gap:0">' +
+        '<div style="background:#F5C21A;border-radius:6px;padding:3px 6px;' +
+        'border:1.5px solid rgba(0,0,0,0.1);box-shadow:0 2px 8px rgba(0,0,0,0.28);' +
+        'display:flex;align-items:center;justify-content:center">' +
+        '<span style="color:#9C27B0;font-family:sans-serif;' +
+        'font-weight:900;font-size:12px;letter-spacing:-0.5px;line-height:1">TAMBO</span>' +
+        '<span style="color:#F5C21A;background:#9C27B0;border-radius:50%;' +
+        'font-size:7px;font-weight:900;font-family:sans-serif;' +
+        'width:11px;height:11px;display:inline-flex;align-items:center;justify-content:center;' +
+        'margin-left:1px;margin-bottom:4px;flex-shrink:0">+</span>' +
+        '</div>' +
+        '<div style="width:2px;height:6px;background:#9C27B0;opacity:0.85"></div>' +
+        '</div>'
+});
+
+function loadTambos(tambos) {
+  tamboLayers.forEach(function(m) { map.removeLayer(m); });
+  tamboLayers = [];
+  (tambos || []).forEach(function(t) {
+    if (!t.lat || !t.lng) return;
+    var popup = '<div style="font-family:sans-serif;padding:4px 6px;min-width:140px">' +
+      '<b style="font-size:12px;color:#FF6B00">🛒 ' + (t.name || 'Tambo+') + '</b>' +
+      (t.address ? '<p style="font-size:11px;color:#555;margin:4px 0 0">' + t.address + '</p>' : '') +
+      '</div>';
+    var m = L.marker([t.lat, t.lng], { icon: tamboIcon, zIndexOffset: 200 })
+      .bindPopup(popup, { maxWidth: 220 });
+    m.addTo(map);
+    tamboLayers.push(m);
+  });
+}
+
+${trafficBadge ? `
+// Badge de tráfico en esquina superior derecha del mapa
+(function(){
+  var badge = L.control({position:'topright'});
+  badge.onAdd = function(){
+    var d = L.DomUtil.create('div');
+    d.style.cssText = 'background:${trafficBadge.bg};border:1.5px solid ${trafficBadge.color};'
+      + 'color:${trafficBadge.color};font-size:11px;font-weight:700;'
+      + 'padding:5px 10px;border-radius:20px;'
+      + 'box-shadow:0 2px 8px rgba(0,0,0,0.15);font-family:sans-serif;'
+      + 'pointer-events:none;';
+    d.innerHTML = '${trafficBadge.icon} ${trafficBadge.label}';
+    return d;
+  };
+  badge.addTo(map);
+})();
+` : ''}
 </script>
 </body></html>`;
 }

@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -10,6 +10,7 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Location from 'expo-location';
+import { Audio } from 'expo-av';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import { exchangeCodeAsync, makeRedirectUri } from 'expo-auth-session';
@@ -19,7 +20,9 @@ import { auth, GOOGLE_WEB_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ANDROID_CLIENT
 import { Platform } from 'react-native';
 import { getTrafficAlerts } from './services/trafficAlerts';
 import { searchPlaces, getPlaceCoords, getWalkingRoute, getTaxiEstimate, getTransitRoute } from './services/googleMaps';
-import { planJourney, getBusArrivals, haversineKm } from './services/journeyPlanner';
+import { planJourney, getBusArrivals, haversineKm, routeAllPoints, getAllStations } from './services/journeyPlanner';
+import { TAMBOS } from './data/tambos';
+const ALL_STATIONS = getAllStations();
 import { askYatu } from './services/yatu';
 import { WebView } from 'react-native-webview';
 import RouteMapView from './components/RouteMapView';
@@ -35,9 +38,8 @@ const HEADER_GRAD = GRAD.header;
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.round(SCREEN_H * 0.50);
 
-const isExpoGo = Constants.appOwnership === 'expo';
-// Proxy redirect - ensure it matches the value registered in Google Cloud Console
-const authProxyUri = `https://auth.expo.io/@${EXPO_USERNAME}/atu_rn`;
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const PROXY_URI = 'https://auth.expo.io/@djmunozromero/atu_rn';
 
 const ATU_NEWS = [
   {
@@ -115,10 +117,10 @@ function buildMapSegments(legs, walk1, walk2) {
   for (const leg of legs) {
     if (leg.type === 'walk') {
       const wd = wi === 0 ? walk1 : walk2;
-      segs.push({ polyline: wd?.polyline || '', color: '#9ca3af', dashed: true, fromLat: leg.fromLat, fromLng: leg.fromLng, toLat: leg.toLat, toLng: leg.toLng });
+      segs.push({ polyline: wd?.polyline || '', color: '#f97316', dashed: true, type: 'walk', fromLat: leg.fromLat, fromLng: leg.fromLng, toLat: leg.toLat, toLng: leg.toLng });
       wi++;
     } else if (leg.type === 'bus') {
-      segs.push({ points: leg.mapPoints || [], color: leg.routeColor || ATU_CYAN, dashed: false, label: leg.routeName, fromLabel: leg.fromStation.name, toLabel: leg.toStation.name, fromLat: leg.fromStation.lat, fromLng: leg.fromStation.lng, toLat: leg.toStation.lat, toLng: leg.toStation.lng });
+      segs.push({ points: leg.mapPoints || [], color: leg.routeColor || ATU_CYAN, dashed: false, label: leg.routeName, routeId: leg.routeId, routeLatlngs: routeAllPoints(leg.routeId), fromLabel: leg.fromStation.name, toLabel: leg.toStation.name, fromLat: leg.fromStation.lat, fromLng: leg.fromStation.lng, toLat: leg.toStation.lat, toLng: leg.toStation.lng });
     } else if (leg.type === 'transfer') {
       segs.push({ points: leg.mapPoints || [], color: '#58a6ff', dashed: true, fromLat: leg.fromLat, fromLng: leg.fromLng, toLat: leg.toLat, toLng: leg.toLng });
     }
@@ -165,16 +167,16 @@ function SplashScreen() {
 //       'up' → Yatu sube · 'down' → Yatu baja al cerrar · 'fade' → misma pestaña
 // Recorridos muy cortos + sin zoom = transición sutil que no marea
 const TRANS_DIST = { right: 14, left: -14, up: 18, down: -18, fade: 0 };
-function ScreenTransition({ routeKey, mode = 'fade', children }) {
-  const t = useRef(new Animated.Value(0)).current; // 0 = entrando · 1 = asentado
-  useEffect(() => {
+function ScreenTransition({ routeKey, mode = 'fade', back = false, children }) {
+  const t = useRef(new Animated.Value(back ? 1 : 0)).current;
+  useLayoutEffect(() => {
+    if (back) { t.setValue(1); return; } // volviendo atrás: sin animación
     t.setValue(0);
     Animated.timing(t, {
       toValue: 1, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true,
     }).start();
-  }, [routeKey, mode]);
+  }, [routeKey, mode, back]);
 
-  // El contenido aparece casi de inmediato (opaco al 50%) para que no se sienta lento
   const opacity = t.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 1, 1] });
   const d = TRANS_DIST[mode] ?? 0;
   const move = t.interpolate({ inputRange: [0, 1], outputRange: [d, 0] });
@@ -238,7 +240,7 @@ function getNativeRedirect(clientId) {
 const nativeClientId  = Platform.OS === 'ios' ? GOOGLE_IOS_CLIENT_ID : GOOGLE_ANDROID_CLIENT_ID;
 const nativeRedirect  = getNativeRedirect(nativeClientId);
 const authClientId    = isExpoGo ? GOOGLE_WEB_CLIENT_ID : (nativeClientId || GOOGLE_WEB_CLIENT_ID);
-const authRedirectUri = isExpoGo ? authProxyUri : (nativeRedirect || authProxyUri);
+const authRedirectUri = isExpoGo ? PROXY_URI : (nativeRedirect || PROXY_URI);
 
 export default function App() {
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -301,9 +303,32 @@ export default function App() {
       .catch(e => Alert.alert('Error al iniciar sesión', e.message));
   }, [response]);
 
-  // Flujo proxy para Expo Go en iOS (auth.expo.io/start)
+  // Flujo proxy para Expo Go: abre auth.expo.io/start con la URL de OAuth
+  async function signInWithExpoGo() {
+    if (!request?.url) return;
+    try {
+      const nativeUrl = makeRedirectUri();
+      const startUrl = `${PROXY_URI}/start?${new URLSearchParams({ authUrl: request.url, returnUrl: nativeUrl })}`;
+      const result = await WebBrowser.openAuthSessionAsync(startUrl, nativeUrl);
+      if (result.type !== 'success') return;
+      const parsed = request.parseReturnUrl(result.url);
+      if (parsed.type !== 'success') {
+        if (parsed.error) Alert.alert('Error de Google', parsed.error.message || 'No se pudo completar el acceso');
+        return;
+      }
+      const tokenResponse = await exchangeCodeAsync(
+        { clientId: GOOGLE_WEB_CLIENT_ID, clientSecret: GOOGLE_CLIENT_SECRET, code: parsed.params.code, redirectUri: PROXY_URI },
+        Google.discovery
+      );
+      const credential = GoogleAuthProvider.credential(tokenResponse.idToken);
+      await signInWithCredential(auth, credential);
+    } catch (e) {
+      Alert.alert('Error al iniciar sesión', e.message);
+    }
+  }
+
   if (user === undefined) return <SplashScreen />;
-  if (!user) return <LoginScreen onSignIn={() => promptAsync({ useProxy: isExpoGo })} loading={!request} loginDisabled={!ENABLE_GOOGLE_LOGIN} />;
+  if (!user) return <LoginScreen onSignIn={isExpoGo ? signInWithExpoGo : () => promptAsync()} loading={!request} loginDisabled={!ENABLE_GOOGLE_LOGIN} />;
   return <MainApp user={user} />;
 }
 
@@ -631,13 +656,15 @@ function MainApp({ user }) {
 
   if (screen === 'picker') {
     return (
-      <ScreenTransition routeKey="picker" mode={deepMode}>
+      <ScreenTransition routeKey="picker" mode={deepMode} back={deepMode === 'left'}>
         <RoutePickerScreen
           alternatives={alternatives}
           destination={destination}
           planning={planning}
           onBack={() => setScreen('home')}
           onSelect={handleAlternativeSelect}
+          peakHours={peakHours}
+          isBack={deepMode === 'left'}
         />
       </ScreenTransition>
     );
@@ -645,22 +672,21 @@ function MainApp({ user }) {
 
   if (screen === 'results') {
     return (
-      <ScreenTransition routeKey="results" mode={deepMode}>
+      <ScreenTransition routeKey="results" mode={deepMode} back={deepMode === 'left'}>
         <ResultScreen
           journey={journey} taxi={taxi} transit={transit}
           buses={buses} connected={connected}
           userLat={userLat} userLng={userLng} destination={destination}
           onBack={() => setScreen('picker')}
           resultTab={resultTab} setResultTab={setResultTab} error={error}
-          busTypes={busTypes}
+          busTypes={busTypes} peakHours={peakHours}
         />
       </ScreenTransition>
     );
   }
 
   return (
-    <View style={{ flex: 1 }}>
-      <ScreenTransition routeKey={tab} mode={homeMode}>
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
       {tab === 'billetera'
         ? <BilleteraScreen user={user} onSignOut={() => signOut(auth)} />
         : tab === 'noticias'
@@ -683,6 +709,7 @@ function MainApp({ user }) {
                 peakHours={peakHours}
                 user={user}
                 userLat={userLat} userLng={userLng}
+                stations={stations}
                 customOrigin={customOrigin}
                 onSetCustomOrigin={setCustomOrigin}
                 onGoYatu={() => setScreen('yatu')}
@@ -690,7 +717,6 @@ function MainApp({ user }) {
                 onGoParaderos={() => setTab('paraderos')}
               />
       }
-      </ScreenTransition>
       <BottomNav tab={tab} setTab={setTab} />
 
       {/* FAB Yatu — visible fuera del Inicio */}
@@ -729,16 +755,170 @@ function getPeakLevel(peakHours) {
   const h    = new Date().getHours();
   const vals = peakHours.cosac || peakHours.linea1 || [];
   const pct  = vals[h] || 0;
-  if (pct >= 80) return { label: 'Hora pico', color: '#ef4444', bg: '#fef2f2', icon: '🔴' };
-  if (pct >= 50) return { label: 'Flujo alto', color: '#f59e0b', bg: '#fffbeb', icon: '🟡' };
-  if (pct >= 25) return { label: 'Flujo normal', color: '#22c55e', bg: '#f0fdf4', icon: '🟢' };
-  return { label: 'Flujo bajo', color: '#3b82f6', bg: '#eff6ff', icon: '🔵' };
+  if (pct >= 80) return { label: 'Hora pico',    color: '#ef4444', bg: '#fef2f2', icon: '🔴', code: 'peak'   };
+  if (pct >= 50) return { label: 'Flujo alto',   color: '#f59e0b', bg: '#fffbeb', icon: '🟡', code: 'high'   };
+  if (pct >= 25) return { label: 'Flujo normal', color: '#22c55e', bg: '#f0fdf4', icon: '🟢', code: 'normal' };
+  return              { label: 'Flujo bajo',   color: '#3b82f6', bg: '#eff6ff', icon: '🔵', code: 'low'    };
 }
+
+// Consejo inteligente basado en la hora actual y las próximas horas.
+// journeyMinutes: tiempo actual de la ruta (para calcular ahorro si espera).
+function getPeakAdvice(peakHours, journeyMinutes) {
+  if (!peakHours) return null;
+  const h    = new Date().getHours();
+  const vals = peakHours.cosac || [];
+  const now  = vals[h] || 0;
+
+  const fmt = (hh) => `${hh > 12 ? hh - 12 : hh === 0 ? 12 : hh}:00 ${hh >= 12 ? 'pm' : 'am'}`;
+
+  // baseMin ya es el tiempo calculado por el simulador con las condiciones actuales.
+  // Para estimar a otra hora: escalar por la relación de factores (after/now).
+  // factor(pct) = 1 + (pct/100)*0.55  →  a 0% congestión factor=1, a 100% factor=1.55
+  const factorOf  = (pct) => 1 + (pct / 100) * 0.55;
+  const timeAfter = (nowPct, afterPct, baseMin) => {
+    if (!baseMin) return null;
+    return Math.round(baseMin * (factorOf(afterPct) / factorOf(nowPct)));
+  };
+
+  if (now >= 80) {
+    let end = h + 1;
+    while (end < 24 && (vals[end] || 0) >= 60) end++;
+    const afterPct  = end < 24 ? (vals[end] || 10) : 10;
+    const afterTime = timeAfter(now, afterPct, journeyMinutes);
+    const savings   = afterTime ? journeyMinutes - afterTime : null;
+    // Severidad real basada en minutos ahorrados, no en el % de congestión
+    const sev = savings >= 15 ? 'high' : savings >= 6 ? 'mid' : 'low';
+    if (sev === 'low') return null; // diferencia insignificante, no mostrar
+
+    const summaryNums = `Ahora ${journeyMinutes} min → ${fmt(end)} ~${afterTime} min`;
+    return sev === 'high' ? {
+      color: '#ef4444', bg: '#fef2f2', icon: '🚨',
+      title: 'Hora pico activa',
+      summary: summaryNums,
+      body: `El tráfico baja a las ${fmt(end)}. Ahora ~${journeyMinutes} min · esperando llegarías en ~${afterTime} min (${savings} min menos).`,
+    } : {
+      color: '#f59e0b', bg: '#fff8ed', icon: '⚠️',
+      title: 'Tráfico elevado',
+      summary: summaryNums,
+      body: `Hay algo de congestión. Si esperas hasta las ${fmt(end)}, llegarías en ~${afterTime} min (${savings} min menos).`,
+    };
+  }
+
+  // Buscar próximo pico en las siguientes 4 horas
+  let nextPeakH = null;
+  for (let i = 1; i <= 4; i++) {
+    if (h + i < 24 && (vals[h + i] || 0) >= 70) { nextPeakH = h + i; break; }
+  }
+
+  if (nextPeakH !== null) {
+    const peakPct  = vals[nextPeakH] || 70;
+    const peakTime = timeAfter(now, peakPct, journeyMinutes);
+    const extra    = peakTime && journeyMinutes ? peakTime - journeyMinutes : null;
+    const gap      = nextPeakH - h;
+
+    if (gap <= 2 && extra >= 5) {
+      return {
+        color: '#f59e0b', bg: '#fff8ed', icon: gap === 1 ? '⚡' : '⏰',
+        title: `Tráfico a las ${fmt(nextPeakH)}`,
+        summary: `Ahora ${journeyMinutes} min → ${fmt(nextPeakH)} ~${peakTime} min`,
+        body: gap === 1
+          ? `¡Sal ahora! A las ${fmt(nextPeakH)} el tráfico sube y el viaje tomará ~${peakTime} min (${extra} min más).`
+          : `Tienes tiempo. Si esperas hasta las ${fmt(nextPeakH)}, el viaje subirá a ~${peakTime} min (${extra} min más).`,
+      };
+    }
+
+    // Hay tráfico más tarde pero no urgente → info tranquila
+    return {
+      color: '#3b82f6', bg: '#eff6ff', icon: '✅',
+      title: 'Sin tráfico ahora',
+      summary: `Pico a las ${fmt(nextPeakH)}`,
+      body: journeyMinutes && extra > 0
+        ? `Buen momento para salir. A las ${fmt(nextPeakH)} el tráfico sube; si esperas, el viaje pasaría de ${journeyMinutes} a ~${peakTime} min (${extra} min más).`
+        : `Buen momento para salir. El tráfico sube a partir de las ${fmt(nextPeakH)}.`,
+    };
+  }
+
+  // Sin congestión relevante en las próximas horas
+  return {
+    color: '#22c55e', bg: '#f0fdf4', icon: '✅',
+    title: 'Sin tráfico',
+    summary: 'Rutas despejadas',
+    body: 'No hay congestión prevista en las próximas horas. Buen momento para viajar.',
+  };
+}
+
+// Banner completo para el picker (sin modal, se ve todo)
+function TrafficBanner({ peakHours, journeyMinutes, style }) {
+  const advice = getPeakAdvice(peakHours, journeyMinutes);
+  if (!advice) return null;
+  return (
+    <View style={[tfb.wrap, { backgroundColor: advice.bg, borderLeftColor: advice.color }, style]}>
+      <Text style={tfb.icon}>{advice.icon}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={[tfb.title, { color: advice.color }]}>{advice.title}</Text>
+        <Text style={tfb.body}>{advice.body}</Text>
+      </View>
+    </View>
+  );
+}
+const tfb = StyleSheet.create({
+  wrap:  { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, padding: 12, borderLeftWidth: 3 },
+  icon:  { fontSize: 20 },
+  title: { fontSize: 13, fontWeight: '800', marginBottom: 2 },
+  body:  { fontSize: 12, color: '#374151', lineHeight: 17 },
+});
+
+// Chip compacto con modal flotante al tocar (para pantalla de resultados)
+function TrafficCard({ advice }) {
+  const [open, setOpen] = React.useState(false);
+  if (!advice) return null;
+  return (
+    <>
+      <TouchableOpacity
+        style={[tfc.chip, { backgroundColor: advice.bg, borderColor: advice.color + '66' }]}
+        onPress={() => setOpen(true)}
+        activeOpacity={0.75}
+      >
+        <Text style={tfc.chipIcon}>{advice.icon}</Text>
+        <Text style={[tfc.chipTitle, { color: advice.color }]}>{advice.title}</Text>
+        <Text style={[tfc.chipMore, { color: advice.color + 'CC' }]}>· Ver mejor hora</Text>
+      </TouchableOpacity>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <TouchableOpacity style={tfc.backdrop} activeOpacity={1} onPress={() => setOpen(false)}>
+          <View style={[tfc.floatCard, { borderColor: advice.color + '55' }]}>
+            <View style={tfc.floatTop}>
+              <Text style={tfc.floatIcon}>{advice.icon}</Text>
+              <Text style={[tfc.floatTitle, { color: advice.color }]}>{advice.title}</Text>
+            </View>
+            <Text style={tfc.floatSummary}>{advice.summary}</Text>
+            <Text style={tfc.floatBody}>{advice.body}</Text>
+            <Text style={tfc.floatDismiss}>Toca para cerrar</Text>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+const tfc = StyleSheet.create({
+  chip:        { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5, alignSelf: 'center', marginBottom: 10 },
+  chipIcon:    { fontSize: 13 },
+  chipTitle:   { fontSize: 12, fontWeight: '800' },
+  chipMore:    { fontSize: 11, fontWeight: '600' },
+  backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  floatCard:   { backgroundColor: '#1C2B4A', borderWidth: 1, borderRadius: 16, padding: 20, width: '100%', maxWidth: 340 },
+  floatTop:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  floatIcon:   { fontSize: 22 },
+  floatTitle:  { fontSize: 16, fontWeight: '900', color: '#fff' },
+  floatSummary:{ fontSize: 13, fontWeight: '700', color: '#94A3B8', marginBottom: 10 },
+  floatBody:   { fontSize: 14, color: '#CBD5E1', lineHeight: 21 },
+  floatDismiss:{ fontSize: 11, color: '#4B5563', textAlign: 'center', marginTop: 14 },
+});
 
 function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onClearQuery,
                       loadingSug, planning, destination, gpsReady,
                       buses, connected, recents, onSelectRecent, campanas, noticias, noticiasLoaded,
-                      peakHours, user, userLat, userLng,
+                      peakHours, user, userLat, userLng, stations,
                       customOrigin, onSetCustomOrigin,
                       onGoYatu, onGoNoticias, onGoParaderos }) {
   const peak = getPeakLevel(peakHours);
@@ -760,6 +940,66 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
   const [auxQuery, setAuxQuery] = React.useState('');
   const [auxSugs, setAuxSugs]   = React.useState([]);
   const [auxLoading, setAuxLoading] = React.useState(false);
+
+  // ── Voz ───────────────────────────────────────────────────────────────────
+  const [isRecording, setIsRecording]     = React.useState(false);
+  const [isTranscribing, setIsTranscribing] = React.useState(false);
+  const recordingRef  = React.useRef(null);
+  const recordTimer   = React.useRef(null);
+
+  async function startVoice() {
+    try {
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso requerido', 'Activa el micrófono en Ajustes para usar la búsqueda por voz.');
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      recordingRef.current = recording;
+      setIsRecording(true);
+      recordTimer.current = setTimeout(stopVoice, 10000);
+    } catch {
+      Alert.alert('Error', 'No se pudo iniciar el micrófono.');
+    }
+  }
+
+  async function stopVoice() {
+    clearTimeout(recordTimer.current);
+    const rec = recordingRef.current;
+    if (!rec) return;
+    recordingRef.current = null;
+    setIsRecording(false);
+    setIsTranscribing(true);
+    try {
+      await rec.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      const uri = rec.getURI();
+      const form = new FormData();
+      form.append('file', { uri, type: 'audio/m4a', name: 'voz.m4a' });
+      form.append('model', 'whisper-1');
+      form.append('language', 'es');
+      const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.EXPO_PUBLIC_OPENAI_KEY}` },
+        body: form,
+      });
+      const d = await r.json();
+      if (d.text?.trim()) {
+        onQueryChange(d.text.trim());
+        setSearchModalOpen(true);
+      }
+    } catch {
+      Alert.alert('Error', 'No se pudo transcribir el audio. Intenta de nuevo.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
+  function handleMicPress() {
+    if (isTranscribing) return;
+    if (isRecording) stopVoice(); else startVoice();
+  }
 
   React.useEffect(() => {
     AsyncStorage.getItem('ATU_SAVED_PLACES').then(v => {
@@ -810,19 +1050,33 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
           </View>
         </View>
 
-        {/* Barra de búsqueda — toca para abrir modal */}
+        {/* Barra de búsqueda */}
         <Reveal delay={90}>
-          <TouchableOpacity style={hs.searchBar} activeOpacity={0.88}
-            onPress={() => setSearchModalOpen(true)}>
-            <Ionicons name="search-outline" size={20} color={C.blueBright} />
-            <Text style={[hs.searchInput, { color: query ? C.text : C.textFaint, marginLeft: 10, flex: 1 }]} numberOfLines={1}>
-              {query || '¿A dónde quieres ir?'}
-            </Text>
+          <View style={hs.searchBar}>
+            <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+              activeOpacity={0.88} onPress={() => setSearchModalOpen(true)}>
+              <Ionicons name="search-outline" size={20} color={C.blueBright} />
+              <Text style={[hs.searchInput, { color: query ? C.text : C.textFaint }]} numberOfLines={1}>
+                {query || '¿A dónde quieres ir?'}
+              </Text>
+            </TouchableOpacity>
             {query.length > 0
-              ? <Ionicons name="close-circle" size={18} color="#9ca3af" />
-              : <Ionicons name="mic-outline" size={19} color={C.textFaint} />
+              ? <TouchableOpacity onPress={onClearQuery} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="close-circle" size={18} color="#9ca3af" />
+                </TouchableOpacity>
+              : <TouchableOpacity onPress={handleMicPress} disabled={isTranscribing}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  {isTranscribing
+                    ? <ActivityIndicator size="small" color={C.cyan} />
+                    : isRecording
+                      ? <Breathe min={0.85} max={1.25} duration={500}>
+                          <Ionicons name="mic" size={20} color="#EF4444" />
+                        </Breathe>
+                      : <Ionicons name="mic-outline" size={19} color={C.textFaint} />
+                  }
+                </TouchableOpacity>
             }
-          </TouchableOpacity>
+          </View>
         </Reveal>
 
         {/* Botón Yatu — dentro del header */}
@@ -845,9 +1099,9 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
           <RouteMapView
             segments={[]}
             fromLat={userLat} fromLng={userLng}
-            toLat={userLat}   toLng={userLng}
-            liveBuses={buses}
-            incidents={FALLBACK_INCIDENTS}
+            liveBuses={[]}
+            stations={ALL_STATIONS}
+            tambos={TAMBOS}
           />
         ) : (
           <View style={hs.mapLoading}>
@@ -981,47 +1235,7 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
       </TouchableOpacity>
 
       {/* ── MODAL QR (desde inicio) ── */}
-      <Modal visible={showHomeQR} animationType="slide" onRequestClose={() => setShowHomeQR(false)}>
-        <View style={wl.qrRoot}>
-          <StatusBar style="light" />
-          <View style={wl.qrHeader}>
-            <TouchableOpacity style={wl.qrBack} onPress={() => setShowHomeQR(false)}>
-              <Ionicons name="chevron-down" size={22} color="#fff" />
-            </TouchableOpacity>
-            <Text style={wl.qrTitle}>Pagar pasaje</Text>
-            <View style={{ width: 38 }} />
-          </View>
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 }}>
-            <View style={wl.qrCard}>
-              <WebView source={{ html: QR_HTML }} style={wl.qrWebView} scrollEnabled={false} originWhitelist={['*']} />
-            </View>
-            <View style={wl.nfcRow}>
-              <Breathe min={1} max={1.18} duration={1300}>
-                <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
-              </Breathe>
-              <Text style={wl.nfcTxt}>NFC activado · acerca tu teléfono</Text>
-            </View>
-            <View style={wl.qrInfoRow}>
-              <View style={{ alignItems: 'center' }}>
-                <Text style={wl.qrInfoLabel}>Saldo</Text>
-                <Text style={wl.qrInfoVal}>S/ 24.50</Text>
-              </View>
-              <View style={wl.qrDivider} />
-              <View style={{ alignItems: 'center' }}>
-                <Text style={wl.qrInfoLabel}>Código válido</Text>
-                <Text style={[wl.qrInfoVal, { color: homeQrSecs > 20 ? '#5BBDF5' : '#f87171' }]}>
-                  {String(Math.floor(homeQrSecs / 60)).padStart(2,'0')}:{String(homeQrSecs % 60).padStart(2,'0')}
-                </Text>
-              </View>
-            </View>
-          </View>
-          <View style={{ paddingHorizontal: 24, paddingBottom: 36 }}>
-            <TouchableOpacity style={wl.qrDoneBtn} onPress={() => setShowHomeQR(false)}>
-              <Text style={wl.qrDoneTxt}>Listo</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <QRPayModal visible={showHomeQR} onClose={() => setShowHomeQR(false)} secs={homeQrSecs} />
 
       {/* ── MODAL BUSCAR RUTA (estilo InDrive) ── */}
       <Modal
@@ -1279,7 +1493,7 @@ function HomeScreen({ query, onQueryChange, suggestions, onSelectSuggestion, onC
 }
 
 // ── Route Picker ──────────────────────────────────────────────────────────────
-function RouteOptionCard({ alt, onSelect, index }) {
+function RouteOptionCard({ alt, onSelect, index, peakHours }) {
   const busLegs  = alt.legs.filter(l => l.type === 'bus');
   const walkLegs = alt.legs.filter(l => l.type === 'walk');
   const totalWalkMin = walkLegs.reduce((s, l) => s + (l.minutes || 0), 0);
@@ -1296,7 +1510,8 @@ function RouteOptionCard({ alt, onSelect, index }) {
     'Corredor exclusivo':  { bg: '#F0FDF4', txt: '#16A34A', icon: '🚍' },
     'Alternativa':         { bg: '#F5F3FF', txt: '#7C3AED', icon: '🔀' },
   };
-  const lc = LABEL_COLOR[alt.routeLabel] || { bg: '#F5F3FF', txt: '#7C3AED', icon: '🔀' };
+  const lc      = LABEL_COLOR[alt.routeLabel] || { bg: '#F5F3FF', txt: '#7C3AED', icon: '🔀' };
+  const peakLvl = getPeakLevel(peakHours);
 
   return (
     <TouchableOpacity style={[pick.card, isFirst && pick.cardFirst]} onPress={onSelect} activeOpacity={0.88}>
@@ -1344,6 +1559,15 @@ function RouteOptionCard({ alt, onSelect, index }) {
         <Text style={pick.nextBusWait}>⏳ Próximo bus en {Math.round(firstBus.arrivals[0].seconds / 60)} min</Text>
       ) : null}
 
+      {/* Traffic chip */}
+      {peakLvl && (
+        <View style={[pick.trafficChip, { backgroundColor: peakLvl.bg }]}>
+          <Text style={[pick.trafficChipTxt, { color: peakLvl.color }]}>
+            {peakLvl.icon} {peakLvl.label} · tiempo puede variar
+          </Text>
+        </View>
+      )}
+
       {/* CTA */}
       <View style={[pick.selectBtn, isFirst && pick.selectBtnFirst]}>
         <Text style={[pick.selectBtnTxt, isFirst && pick.selectBtnTxtFirst]}>Ver esta ruta →</Text>
@@ -1352,7 +1576,7 @@ function RouteOptionCard({ alt, onSelect, index }) {
   );
 }
 
-function RoutePickerScreen({ alternatives, destination, planning, onBack, onSelect }) {
+function RoutePickerScreen({ alternatives, destination, planning, onBack, onSelect, peakHours, isBack }) {
   const destName = destination?.name?.split(',')[0] || 'Destino';
   return (
     <View style={pick.root}>
@@ -1377,11 +1601,14 @@ function RoutePickerScreen({ alternatives, destination, planning, onBack, onSele
         </View>
       ) : (
         <ScrollView contentContainerStyle={pick.list} showsVerticalScrollIndicator={false}>
+          <TrafficBanner peakHours={peakHours} style={{ marginBottom: 4 }} />
           <Text style={pick.sectionTitle}>Elige cómo llegar</Text>
           {alternatives.map((alt, i) => (
-            <Reveal key={i} delay={i * 100} distance={22}>
-              <RouteOptionCard alt={alt} index={i} onSelect={() => onSelect(alt)} />
-            </Reveal>
+            isBack
+              ? <RouteOptionCard key={i} alt={alt} index={i} onSelect={() => onSelect(alt)} peakHours={peakHours} />
+              : <Reveal key={i} delay={i * 100} distance={22}>
+                  <RouteOptionCard alt={alt} index={i} onSelect={() => onSelect(alt)} peakHours={peakHours} />
+                </Reveal>
           ))}
           <View style={{ height: 24 }} />
         </ScrollView>
@@ -1420,8 +1647,10 @@ const pick = StyleSheet.create({
   selectBtnFirst:   { backgroundColor: '#1668AD' },
   selectBtnTxt:     { fontSize: 13, fontWeight: '800', color: '#1668AD' },
   selectBtnTxtFirst:{ color: '#fff' },
-  loadingBox:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
-  loadingTxt:      { fontSize: 14, fontWeight: '600', color: '#8895AE' },
+  trafficChip:      { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 10, alignSelf: 'flex-start' },
+  trafficChipTxt:   { fontSize: 11, fontWeight: '700' },
+  loadingBox:       { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
+  loadingTxt:       { fontSize: 14, fontWeight: '600', color: '#8895AE' },
 });
 
 // ── Noticias Screen ───────────────────────────────────────────────────────────
@@ -2066,6 +2295,152 @@ function CuentaScreen({ user, onSignOut }) {
 // ── Billetera Screen ──────────────────────────────────────────────────────────
 const QR_HTML = `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;display:flex;align-items:center;justify-content:center;background:transparent;}canvas{border-radius:8px;}</style><script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script></head><body><div id="qr"></div><script>new QRCode(document.getElementById("qr"),{text:"ATU-PAY:5021-4821:S/2.50:"+Date.now(),width:200,height:200,colorDark:"#0C1E40",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});<\/script></body></html>`;
 
+// ── QR Pay Modal ─ efectos de escáner ─────────────────────────────────────────
+function QRPayModal({ visible, onClose, secs }) {
+  const cardScale   = useRef(new Animated.Value(0.82)).current;
+  const cardOpacity = useRef(new Animated.Value(0)).current;
+  const beam        = useRef(new Animated.Value(0)).current;
+  const ring1Scale  = useRef(new Animated.Value(1)).current;
+  const ring1Op     = useRef(new Animated.Value(0)).current;
+  const ring2Scale  = useRef(new Animated.Value(1)).current;
+  const ring2Op     = useRef(new Animated.Value(0)).current;
+
+  useLayoutEffect(() => {
+    if (!visible) { cardScale.setValue(0.82); cardOpacity.setValue(0); return; }
+
+    // Entrada del card
+    Animated.parallel([
+      Animated.spring(cardScale,   { toValue: 1, friction: 5, tension: 90, useNativeDriver: true }),
+      Animated.timing(cardOpacity, { toValue: 1, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+
+    // Beam scanner
+    const beamLoop = Animated.loop(Animated.sequence([
+      Animated.timing(beam, { toValue: 1, duration: 1900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(beam, { toValue: 0, duration: 0, useNativeDriver: true }),
+      Animated.delay(350),
+    ]));
+    beamLoop.start();
+
+    // Glow rings con offset de fase
+    const makeRing = (scale, op, delay) => Animated.loop(Animated.sequence([
+      Animated.delay(delay),
+      Animated.parallel([
+        Animated.timing(scale, { toValue: 1.18, duration: 1100, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(op,    { toValue: 0.55, duration: 300,  useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.timing(scale, { toValue: 1.38, duration: 1100, easing: Easing.in(Easing.ease),  useNativeDriver: true }),
+        Animated.timing(op,    { toValue: 0,    duration: 900,  useNativeDriver: true }),
+      ]),
+      Animated.timing(scale, { toValue: 1, duration: 0, useNativeDriver: true }),
+    ]));
+    const r1 = makeRing(ring1Scale, ring1Op, 0);
+    const r2 = makeRing(ring2Scale, ring2Op, 700);
+    r1.start(); r2.start();
+
+    return () => { beamLoop.stop(); r1.stop(); r2.stop(); };
+  }, [visible]);
+
+  const beamY  = beam.interpolate({ inputRange: [0, 1], outputRange: [0, 218] });
+  const mins   = String(Math.floor(secs / 60)).padStart(2, '0');
+  const rest   = String(secs % 60).padStart(2, '0');
+  const urgent = secs <= 20;
+
+  const Corner = ({ style }) => (
+    <View style={[{ position: 'absolute', width: 22, height: 22 }, style]} />
+  );
+
+  return (
+    <Modal visible={visible} animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      <View style={wl.qrRoot}>
+        <StatusBar style="light" />
+        <LinearGradient colors={['#0A1A38', '#071128']} style={StyleSheet.absoluteFill} />
+
+        {/* Header */}
+        <View style={wl.qrHeader}>
+          <TouchableOpacity style={wl.qrBack} onPress={onClose} activeOpacity={0.8}>
+            <Ionicons name="chevron-down" size={22} color="#fff" />
+          </TouchableOpacity>
+          <Text style={wl.qrTitle}>Pagar pasaje</Text>
+          <View style={{ width: 38 }} />
+        </View>
+
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+
+          {/* Glow rings detrás del card */}
+          <Animated.View style={{ position: 'absolute', width: 274, height: 274, borderRadius: 40,
+            backgroundColor: '#1A6FD4', opacity: ring1Op, transform: [{ scale: ring1Scale }] }} />
+          <Animated.View style={{ position: 'absolute', width: 274, height: 274, borderRadius: 40,
+            backgroundColor: '#0EA5E9', opacity: ring2Op, transform: [{ scale: ring2Scale }] }} />
+
+          {/* Card con entrada animada */}
+          <Animated.View style={[wl.qrCard, { opacity: cardOpacity, transform: [{ scale: cardScale }] }]}>
+
+            {/* QR */}
+            <WebView source={{ html: QR_HTML }} style={wl.qrWebView} scrollEnabled={false} originWhitelist={['*']} />
+
+            {/* Beam scanner */}
+            <View style={{ position: 'absolute', top: 26, left: 26, right: 26, bottom: 26, overflow: 'hidden', borderRadius: 6 }} pointerEvents="none">
+              <Animated.View style={{ position: 'absolute', left: -4, right: -4, height: 3,
+                backgroundColor: C.cyan, borderRadius: 2,
+                shadowColor: C.cyan, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 8,
+                transform: [{ translateY: beamY }] }} />
+            </View>
+
+            {/* Brackets en esquinas */}
+            <View style={{ position: 'absolute', top: 14, left: 14, width: 22, height: 22,
+              borderTopWidth: 3, borderLeftWidth: 3, borderColor: C.cyan, borderTopLeftRadius: 5 }} pointerEvents="none" />
+            <View style={{ position: 'absolute', top: 14, right: 14, width: 22, height: 22,
+              borderTopWidth: 3, borderRightWidth: 3, borderColor: C.cyan, borderTopRightRadius: 5 }} pointerEvents="none" />
+            <View style={{ position: 'absolute', bottom: 14, left: 14, width: 22, height: 22,
+              borderBottomWidth: 3, borderLeftWidth: 3, borderColor: C.cyan, borderBottomLeftRadius: 5 }} pointerEvents="none" />
+            <View style={{ position: 'absolute', bottom: 14, right: 14, width: 22, height: 22,
+              borderBottomWidth: 3, borderRightWidth: 3, borderColor: C.cyan, borderBottomRightRadius: 5 }} pointerEvents="none" />
+          </Animated.View>
+
+          {/* "Escaneando…" */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 22 }}>
+            <Breathe min={1} max={1.22} duration={900}>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.cyan }} />
+            </Breathe>
+            <Text style={{ color: '#A2B4D2', fontSize: 13, fontWeight: '700' }}>Escaneando…</Text>
+          </View>
+
+          {/* NFC */}
+          <View style={[wl.nfcRow, { marginTop: 10 }]}>
+            <Breathe min={1} max={1.18} duration={1300}>
+              <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
+            </Breathe>
+            <Text style={wl.nfcTxt}>NFC activado · acerca tu teléfono</Text>
+          </View>
+
+          {/* Info: saldo + timer */}
+          <View style={wl.qrInfoRow}>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={wl.qrInfoLabel}>Saldo</Text>
+              <Text style={wl.qrInfoVal}>S/ 24.50</Text>
+            </View>
+            <View style={wl.qrDivider} />
+            <View style={{ alignItems: 'center' }}>
+              <Text style={wl.qrInfoLabel}>Código válido</Text>
+              <Breathe min={1} max={urgent ? 1.12 : 1} duration={500}>
+                <Text style={[wl.qrInfoVal, { color: urgent ? '#f87171' : '#5BBDF5' }]}>{mins}:{rest}</Text>
+              </Breathe>
+            </View>
+          </View>
+        </View>
+
+        <View style={{ paddingHorizontal: 24, paddingBottom: 36 }}>
+          <TouchableOpacity style={wl.qrDoneBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={wl.qrDoneTxt}>Listo</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function BilleteraScreen({ user, onSignOut }) {
   const [showQR, setShowQR] = React.useState(false);
   const [qrSecs, setQrSecs] = React.useState(120);
@@ -2162,60 +2537,7 @@ function BilleteraScreen({ user, onSignOut }) {
         ))}
       </ScrollView>
 
-      {/* ── Modal QR ── */}
-      <Modal visible={showQR} animationType="slide" onRequestClose={() => setShowQR(false)}>
-        <View style={wl.qrRoot}>
-          <StatusBar style="light" />
-          {/* Header */}
-          <View style={wl.qrHeader}>
-            <TouchableOpacity style={wl.qrBack} onPress={() => setShowQR(false)}>
-              <Ionicons name="chevron-down" size={22} color="#fff" />
-            </TouchableOpacity>
-            <Text style={wl.qrTitle}>Pagar pasaje</Text>
-            <View style={{ width: 38 }} />
-          </View>
-
-          {/* QR + shimmer */}
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 }}>
-            <View style={wl.qrCard}>
-              <WebView
-                source={{ html: QR_HTML }}
-                style={wl.qrWebView}
-                scrollEnabled={false}
-                originWhitelist={['*']}
-              />
-            </View>
-
-            {/* NFC */}
-            <View style={wl.nfcRow}>
-              <Breathe min={1} max={1.18} duration={1300}>
-                <Ionicons name="wifi-outline" size={20} color="#5BBDF5" />
-              </Breathe>
-              <Text style={wl.nfcTxt}>NFC activado · acerca tu teléfono</Text>
-            </View>
-
-            {/* Info: saldo + tiempo */}
-            <View style={wl.qrInfoRow}>
-              <View style={{ alignItems: 'center' }}>
-                <Text style={wl.qrInfoLabel}>Saldo</Text>
-                <Text style={wl.qrInfoVal}>S/ 24.50</Text>
-              </View>
-              <View style={wl.qrDivider} />
-              <View style={{ alignItems: 'center' }}>
-                <Text style={wl.qrInfoLabel}>Código válido</Text>
-                <Text style={[wl.qrInfoVal, { color: qrSecs > 20 ? '#5BBDF5' : '#f87171' }]}>{qrMins}:{qrRest}</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Botón listo */}
-          <View style={{ paddingHorizontal: 24, paddingBottom: 36 }}>
-            <TouchableOpacity style={wl.qrDoneBtn} onPress={() => setShowQR(false)}>
-              <Text style={wl.qrDoneTxt}>Listo</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <QRPayModal visible={showQR} onClose={() => setShowQR(false)} secs={qrSecs} />
     </View>
   );
 }
@@ -2395,7 +2717,7 @@ function calcEta(distKm) {
 }
 
 function ResultScreen({ journey, taxi, transit, buses, connected, userLat, userLng,
-                        destination, onBack, resultTab, setResultTab, error, busTypes }) {
+                        destination, onBack, resultTab, setResultTab, error, busTypes, peakHours }) {
   // Fix initial map position so the WebView doesn't rebuild on every GPS tick
   const initPos = React.useRef({ lat: userLat, lng: userLng });
 
@@ -2429,10 +2751,23 @@ function ResultScreen({ journey, taxi, transit, buses, connected, userLat, userL
   }, [journey?.legs, buses, effectiveEta]);
 
   const liveBusesForMap = useMemo(() => {
+    // Parada activa = la cuya parada de abordaje esté más cerca del usuario ahora
+    const busLegs = liveLegs.filter(l => l.type === 'bus');
+    if (!busLegs.length) return [];
+    let activeLeg = busLegs[0];
+    if (userLat && userLng) {
+      let minDist = Infinity;
+      for (const leg of busLegs) {
+        const d = haversineKm(userLat, userLng, leg.fromStation.lat, leg.fromStation.lng);
+        if (d < minDist) { minDist = d; activeLeg = leg; }
+      }
+    }
+
     const am = new Map();
-    liveLegs.filter(l => l.type === 'bus').forEach(l =>
-      (l.arrivals || []).forEach(a => am.set(a.busId, { catchable: a.catchable, boardLat: l.fromStation.lat }))
-    );
+    (activeLeg.arrivals || []).forEach(a => {
+      am.set(a.busId, { catchable: a.catchable, boardLat: activeLeg.fromStation.lat });
+    });
+
     const PASS = 0.00018;
     return buses.filter(b => {
       const info = am.get(b.id); if (!info) return false;
@@ -2441,7 +2776,7 @@ function ResultScreen({ journey, taxi, transit, buses, connected, userLat, userL
       if (b.direction === 'S' && b.lat > info.boardLat + PASS) return false;
       return true;
     }).map(b => ({ ...b, catchable: am.get(b.id).catchable }));
-  }, [buses, liveLegs]);
+  }, [buses, liveLegs, userLat, userLng]);
 
   const activeSegments = journey?.mapSegments || [];
 
@@ -2459,6 +2794,7 @@ function ResultScreen({ journey, taxi, transit, buses, connected, userLat, userL
           toLat={destination?.lat} toLng={destination?.lng}
           liveBuses={liveBusesForMap}
           liveUserLat={userLat} liveUserLng={userLng}
+          trafficCode={getPeakLevel(peakHours)?.code}
         />
         {/* Overlay encima del mapa: botón atrás + badge destino */}
         <View style={rs.mapOverlay} pointerEvents="box-none">
@@ -2479,7 +2815,7 @@ function ResultScreen({ journey, taxi, transit, buses, connected, userLat, userL
         {!!error && <View style={rs.errorBanner}><Text style={rs.errorTxt}>⚠️ {error}</Text></View>}
 
         <ScrollView contentContainerStyle={rs.sheetContent} showsVerticalScrollIndicator={false}>
-          <ATUContent liveLegs={liveLegs} eta={eta} journey={journey} connected={connected} busTypes={busTypes} />
+          <ATUContent liveLegs={liveLegs} eta={eta} journey={journey} connected={connected} busTypes={busTypes} peakHours={peakHours} />
         </ScrollView>
       </View>
     </View>
@@ -2487,7 +2823,7 @@ function ResultScreen({ journey, taxi, transit, buses, connected, userLat, userL
 }
 
 // ── ATU Content ───────────────────────────────────────────────────────────────
-function ATUContent({ liveLegs, eta, journey, connected, busTypes }) {
+function ATUContent({ liveLegs, eta, journey, connected, busTypes, peakHours }) {
   if (!journey) return (
     <View style={s.emptyState}>
       <Text style={s.emptyIcon}>🚌</Text>
@@ -2496,27 +2832,24 @@ function ATUContent({ liveLegs, eta, journey, connected, busTypes }) {
     </View>
   );
 
+  const advice = getPeakAdvice(peakHours, journey.totalMinutes);
+
   return (
     <View>
-      {/* Summary */}
-      <View style={s.summaryBar}>
-        <View style={s.summaryItem}>
-          <Text style={s.summaryVal}>{journey.totalMinutes} min</Text>
-          <Text style={s.summaryLbl}>total</Text>
-        </View>
-        <View style={s.summaryDiv} />
-        <View style={s.summaryItem}>
-          <Text style={s.summaryVal}>{journey.transfers === 0 ? 'Directo' : `${journey.transfers} transb.`}</Text>
-          <Text style={s.summaryLbl}>ruta</Text>
-        </View>
-        <View style={s.summaryDiv} />
-        <View style={s.summaryItem}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <View style={[s.liveDot, { backgroundColor: connected ? '#3fb950' : '#555' }]} />
-            <Text style={[s.liveTxt, { color: connected ? '#3fb950' : '#555' }]}>{connected ? 'En vivo' : 'Offline'}</Text>
-          </View>
-          <Text style={s.summaryLbl}>buses</Text>
-        </View>
+      {/* Chip de tráfico — encima del resumen, toca para detalle completo */}
+      {advice && <TrafficCard advice={advice} />}
+
+      {/* ── Fila centrada: tiempo + tipo de ruta ── */}
+      <View style={s.summaryRow}>
+        <Text style={s.summaryTime}>
+          {journey.totalMinutes}<Text style={s.summaryTimeUnit}> min</Text>
+        </Text>
+        <View style={s.summaryDot} />
+        <Text style={s.summaryMeta}>
+          {journey.transfers === 0 ? 'Directo' : `${journey.transfers} transbordo${journey.transfers > 1 ? 's' : ''}`}
+        </Text>
+        <View style={s.summaryDot} />
+        <View style={[s.liveDot, { backgroundColor: connected ? '#3fb950' : '#30363d' }]} />
       </View>
 
       {!connected && (
@@ -2983,7 +3316,7 @@ const hs = StyleSheet.create({
   depTime:      { fontSize: 10.5, fontWeight: '600', color: C.textFaint, marginTop: 1 },
   // Search bar dentro del header
   searchBar:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 0, height: 52, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.22, shadowRadius: 10, elevation: 5 },
-  searchInput:  { flex: 1, color: '#0E2147', fontSize: 15.5, fontWeight: '600', paddingVertical: 0, marginLeft: 10, marginRight: 6 },
+  searchInput:  { flex: 1, color: '#0E2147', fontSize: 15.5, fontWeight: '600', paddingVertical: 0, marginLeft: 10, marginRight: 8 },
   // Sugerencias (dentro del header, bajo el searchBar)
   suggestionsBox:  { backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden', marginBottom: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
   suggestionRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 14 },
@@ -3205,7 +3538,15 @@ const s = StyleSheet.create({
   emptyTitle: { color: '#c9d1d9', fontSize: 16, fontWeight: '800', textAlign: 'center' },
   emptyBody:  { color: '#484f58', fontSize: 13, textAlign: 'center', lineHeight: 20 },
 
-  // Summary bar
+  // Summary row compacto
+  summaryRow:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#13294F', marginBottom: 8 },
+  summaryTime:     { color: '#fff', fontSize: 32, fontWeight: '900', letterSpacing: -0.5 },
+  summaryTimeUnit: { fontSize: 15, fontWeight: '600', color: '#8b949e' },
+  summaryMeta:     { color: '#8b949e', fontSize: 15, fontWeight: '600' },
+  summaryDot:      { width: 4, height: 4, borderRadius: 2, backgroundColor: '#30363d' },
+  summaryPeakChip: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  summaryPeakTxt:  { fontSize: 11, fontWeight: '800' },
+  // Legacy (aún usados en Transit/Taxi summary)
   summaryBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#13294F', marginBottom: 12 },
   summaryItem:{ alignItems: 'center' },
   summaryVal: { color: '#fff', fontSize: 18, fontWeight: '800' },

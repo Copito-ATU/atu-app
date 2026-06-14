@@ -26,6 +26,27 @@ function estimateRideMin(routeId, fromId, toId) {
   return (km / BUS_KMH) * 60 + Math.abs(toId - fromId) * DWELL_PER_STOP;
 }
 
+export function getAllStations() {
+  const seen = new Set();
+  const result = [];
+  for (const route of ROUTES) {
+    for (const st of route.stations) {
+      const key = st.lat + ',' + st.lng;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push({ id: st.id, name: st.name, lat: st.lat, lng: st.lng, system: route.type || 'corredor' });
+      }
+    }
+  }
+  return result;
+}
+
+export function routeAllPoints(routeId) {
+  const route = getRoute(routeId);
+  if (!route) return [];
+  return route.stations.map(st => [st.lat, st.lng]);
+}
+
 export function stationPoints(routeId, fromId, toId) {
   const route = getRoute(routeId);
   if (!route) return [];
